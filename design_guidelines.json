@@ -1,0 +1,118 @@
+{
+  "project_name": "Automated Trading Bot Dashboard",
+  "domain": "Finance, Algorithmic Trading, Infrastructures",
+  "app_type": "hybrid_fullstack",
+  "theme": "Light",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "language": "French",
+  "colors": {
+    "primary": "#002FA7",
+    "primary_hover": "#002280",
+    "background": "#FFFFFF",
+    "surface": "#F8FAFC",
+    "surface_hover": "#F1F5F9",
+    "text_primary": "#0F172A",
+    "text_secondary": "#64748B",
+    "border": "#E2E8F0",
+    "success": "#10B981",
+    "danger": "#EF4444",
+    "danger_hover": "#DC2626",
+    "warning": "#F59E0B",
+    "demo_mode": "#3B82F6",
+    "real_mode": "#F59E0B",
+    "kill_switch": "#EF4444",
+    "kill_switch_active": "#B91C1C"
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Cabinet Grotesk",
+      "body": "IBM Plex Sans",
+      "mono": "JetBrains Mono"
+    },
+    "sizes": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight",
+      "h3": "text-xl sm:text-2xl",
+      "h4": "text-lg sm:text-xl",
+      "body": "text-base",
+      "small": "text-sm",
+      "overline": "text-xs uppercase tracking-[0.2em]"
+    }
+  },
+  "spacing_and_layout": {
+    "dashboard_grid": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-4 md:gap-6",
+    "container_padding": "p-4 md:p-6 lg:p-8",
+    "border_radius": "rounded-md",
+    "card_style": "bg-white border border-slate-200 shadow-sm",
+    "glassmorphism": "backdrop-blur-xl bg-white/70 border-b border-white/40 shadow-sm"
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#002FA7] text-white hover:bg-[#002280] transition-colors rounded-md px-4 py-2 font-medium",
+      "danger": "bg-red-500 text-white hover:bg-red-600 transition-colors rounded-md px-4 py-2 font-bold",
+      "kill_switch": "bg-red-600 text-white hover:bg-red-700 transition-colors rounded-md px-8 py-4 font-black uppercase tracking-wider text-xl shadow-[0_0_15px_rgba(239,68,68,0.5)] border-2 border-red-800",
+      "outline": "border border-slate-300 text-slate-700 hover:bg-slate-50 transition-colors rounded-md px-4 py-2"
+    },
+    "badges": {
+      "demo": "bg-blue-100 text-blue-800 border border-blue-200 px-2 py-1 rounded-full text-xs font-bold uppercase",
+      "real": "bg-amber-100 text-amber-800 border border-amber-200 px-2 py-1 rounded-full text-xs font-bold uppercase"
+    },
+    "shadcn_overrides": {
+      "Card": "border-slate-200 shadow-sm rounded-md",
+      "Input": "border-slate-300 focus:ring-[#002FA7] focus:border-[#002FA7] rounded-md",
+      "Table": "text-sm",
+      "TabsList": "h-auto p-1 bg-slate-100 rounded-md"
+    }
+  },
+  "design_rules": {
+    "contrast": "Ensure text meets APCA standards. Use tinted greys (slate). High contrast for data visibility.",
+    "icons": "Use Phosphor Icons (@phosphor-icons/react) for dense data clarity.",
+    "motion": "Minimal animations. Fast transitions (150ms) for professional feel. No bouncy effects.",
+    "alignment": "Left-align dense data and tables. Right-align numeric values in tables."
+  },
+  "data_test_ids_convention": "kebab-case, role-based. e.g., login-form-submit-button, kill-switch-button, demo-real-toggle",
+  "media": {
+    "image_urls": [
+      {
+        "url": "https://images.unsplash.com/photo-1637625854255-d893202554f4?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNzl8MHwxfHNlYXJjaHwxfHwlMjJhYnN0cmFjdCUyMGdyaWQlMjBiYWNrZ3JvdW5kJTIwd2hpdGUlMjJ8ZW58MHx8fHwxNzgwNjc1MTM2fDA&ixlib=rb-4.1.0&q=85",
+        "category": "background",
+        "description": "Abstract white grid for authentication screen background"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1655249481446-25d575f1c054?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1ODR8MHwxfHNlYXJjaHwyfHwlMjJidXNpbmVzcyUyMHByb2ZpbGUlMjBwb3J0cmFpdCUyMnxlbnwwfHx8fDE3ODA2NzUxMzZ8MA&ixlib=rb-4.1.0&q=85",
+        "category": "avatar",
+        "description": "Professional profile picture for user account menu"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1590283603385-17ffb3a7f29f?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1MTN8MHwxfHNlYXJjaHwxfHwlMjJmaW5hbmNpYWwlMjBjaGFydCUyMnxlbnwwfHx8fDE3ODA2NzUxNDN8MA&ixlib=rb-4.1.0&q=85",
+        "category": "placeholder_chart",
+        "description": "Financial chart background for empty states or marketing banners"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Install Phosphor Icons: yarn add @phosphor-icons/react",
+    "Install Recharts for performance metrics and equity curve: yarn add recharts",
+    "Ensure the Demo/Real mode toggle explicitly requires manual validation (e.g., a Dialog confirmation) before switching to Real mode.",
+    "The Kill Switch MUST be the most prominent button on the dashboard. Use the specific kill_switch button styles provided.",
+    "All currency values must be formatted clearly (e.g., in EUR/USD) with correct decimal alignment in tables.",
+    "Use pure HTML/Tailwind for structural layout (Control Room Grid). Use Shadcn strictly for functional UI (Dialog, Select, Table, Tabs).",
+    "Implement real-time visual feedback for open positions (green for profit, red for loss).",
+    "Language is strictly French.",
+    "Every interactive element MUST have a data-testid attribute."
+  ],
+  "pages_and_features": [
+    "Auth Screen: Login/Register (Email/Password) with abstract background.",
+    "Dashboard: Real-time balance, P&L, Equity Curve, Open Positions preview.",
+    "Bot Control Panel: ON/OFF toggle, Kill Switch (Red, massive), Demo/Real switcher with Validation Dialog.",
+    "Strategies Screen: Selectable list (Scalping RSI, Trend EMA/MACD, Mean-Reversion Bollinger, Multi-indicators).",
+    "Risk Settings: Forms for Stop Loss, Take Profit, Daily Drawdown, Position Sizing, Risk/Reward.",
+    "Open Positions: Live data table.",
+    "Trade History: Table with filters and CSV/JSON export buttons.",
+    "Performance Metrics: Winrate, Drawdown, Profit Factor, Expectancy, Sharpe Ratio with charts.",
+    "Audit Logs: List of bot decisions and entry/exit reasons.",
+    "Cost Tracker: Module to add/track/analyze VPS, API, data, and maintenance expenses.",
+    "MT5 Connection Settings: Encrypted form for credentials.",
+    "Backtesting Interface: Historical data testing setup."
+  ]
+}
