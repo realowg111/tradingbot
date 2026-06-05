@@ -1,60 +1,619 @@
-from fastapi import FastAPI, APIRouter
-from dotenv import load_dotenv
-from starlette.middleware.cors import CORSMiddleware
-from motor.motor_asyncio import AsyncIOMotorClient
-import os
-import logging
-from pathlib import Path
-from pydantic import BaseModel, Field
-from typing import List
-import uuid
-from datetime import datetime
+"""Trading Bot Backend - main FastAPI app.
 
+Endpoints prefixed with /api.
+"""
+import os
+import io
+import csv
+import json
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional
+
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Response
+from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
 ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / '.env')
+load_dotenv(ROOT_DIR / ".env")
 
-# MongoDB connection
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+from database import (
+    users_col, trades_col, positions_col, audit_col, costs_col,
+    config_col, state_col, ensure_indexes,
+)
+from models import (
+    UserRegister, UserLogin, UserPublic, Token,
+    MT5CredentialsIn, MT5CredentialsOut,
+    BotConfig, BotState, RiskConfig, StrategyConfig,
+    CostItem, CostItemCreate, AuditLog,
+    ModeSwitchRequest, BacktestRequest, BacktestResult, Trade,
+    utc_now, uid,
+)
+from security import (
+    hash_password, verify_password,
+    create_access_token, encrypt_str, decrypt_str,
+)
+from deps import get_current_user
+from services.bot_runner import bot_runner
+from services.paper_engine import market, SYMBOL_SPECS
+from services.strategies import STRATEGIES
+from services.metrics import compute_metrics
 
-# Create the main app without a prefix
-app = FastAPI()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+logger = logging.getLogger("main")
 
-# Create a router with the /api prefix
-api_router = APIRouter(prefix="/api")
+app = FastAPI(title="Trading Bot API", version="1.0.0")
+api = APIRouter(prefix="/api")
 
 
-# Define Models
-class StatusCheck(BaseModel):
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+# --- Startup / Shutdown ---
+@app.on_event("startup")
+async def on_startup():
+    await ensure_indexes()
+    # Seed admin user
+    admin_email = os.environ.get("ADMIN_EMAIL", "admin@trading.bot")
+    admin_pwd = os.environ.get("ADMIN_PASSWORD", "Admin123!")
+    existing = await users_col.find_one({"email": admin_email})
+    if not existing:
+        await users_col.insert_one({
+            "id": uid(),
+            "email": admin_email,
+            "password_hash": hash_password(admin_pwd),
+            "is_admin": True,
+            "created_at": utc_now(),
+        })
+        logger.info("Admin user seeded: %s", admin_email)
+    # Ensure config & state exist
+    if not await config_col.find_one({}):
+        await config_col.insert_one(BotConfig().model_dump())
+    if not await state_col.find_one({}):
+        await state_col.insert_one(BotState().model_dump())
+    # Start background bot loop
+    await bot_runner.start()
+    logger.info("Backend ready")
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
 
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot_runner.stop()
+
+
+# --- Health ---
+@api.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"service": "Trading Bot API", "status": "online", "version": "1.0.0"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.dict()
-    status_obj = StatusCheck(**status_dict)
-    _ = await db.status_checks.insert_one(status_obj.dict())
-    return status_obj
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    status_checks = await db.status_checks.find().to_list(1000)
-    return [StatusCheck(**status_check) for status_check in status_checks]
+@api.get("/health")
+async def health():
+    return {"status": "ok", "ts": datetime.now(timezone.utc).isoformat()}
 
-# Include the router in the main app
-app.include_router(api_router)
 
+# --- Auth ---
+@api.post("/auth/register", response_model=Token, status_code=status.HTTP_201_CREATED)
+async def register(payload: UserRegister):
+    existing = await users_col.find_one({"email": payload.email})
+    if existing:
+        raise HTTPException(400, "Email déjà enregistré")
+    user_id = uid()
+    await users_col.insert_one({
+        "id": user_id,
+        "email": payload.email,
+        "password_hash": hash_password(payload.password),
+        "is_admin": False,
+        "created_at": utc_now(),
+    })
+    token = create_access_token({"sub": user_id, "email": payload.email, "is_admin": False})
+    return Token(access_token=token, user=UserPublic(id=user_id, email=payload.email, is_admin=False))
+
+
+@api.post("/auth/login", response_model=Token)
+async def login(payload: UserLogin):
+    doc = await users_col.find_one({"email": payload.email}, {"_id": 0})
+    if not doc or not verify_password(payload.password, doc["password_hash"]):
+        raise HTTPException(401, "Identifiants invalides")
+    token = create_access_token({"sub": doc["id"], "email": doc["email"], "is_admin": doc.get("is_admin", False)})
+    return Token(
+        access_token=token,
+        user=UserPublic(id=doc["id"], email=doc["email"], is_admin=doc.get("is_admin", False)),
+    )
+
+
+@api.get("/auth/me", response_model=UserPublic)
+async def me(user: UserPublic = Depends(get_current_user)):
+    return user
+
+
+# --- MT5 credentials (encrypted) ---
+@api.post("/mt5/credentials", response_model=MT5CredentialsOut)
+async def save_mt5(creds: MT5CredentialsIn, user: UserPublic = Depends(get_current_user)):
+    encrypted = encrypt_str(json.dumps({
+        "login": creds.login, "password": creds.password,
+        "server": creds.server, "broker": creds.broker,
+    }))
+    await users_col.update_one({"id": user.id}, {"$set": {"mt5_credentials": encrypted}})
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="mt5_credentials_updated",
+                                        details={"user": user.email, "login": creds.login, "server": creds.server}).model_dump())
+    return MT5CredentialsOut(login=creds.login, server=creds.server, broker=creds.broker, saved=True)
+
+
+@api.get("/mt5/credentials", response_model=Optional[MT5CredentialsOut])
+async def get_mt5(user: UserPublic = Depends(get_current_user)):
+    doc = await users_col.find_one({"id": user.id}, {"_id": 0})
+    if not doc or "mt5_credentials" not in doc:
+        return None
+    data = json.loads(decrypt_str(doc["mt5_credentials"]))
+    return MT5CredentialsOut(login=data["login"], server=data["server"], broker=data.get("broker"), saved=True)
+
+
+# --- Bot config & state ---
+async def _get_config() -> BotConfig:
+    doc = await config_col.find_one({}, {"_id": 0})
+    return BotConfig(**doc) if doc else BotConfig()
+
+
+async def _get_state() -> BotState:
+    doc = await state_col.find_one({}, {"_id": 0})
+    return BotState(**doc) if doc else BotState()
+
+
+@api.get("/bot/config", response_model=BotConfig)
+async def get_config(user: UserPublic = Depends(get_current_user)):
+    return await _get_config()
+
+
+@api.get("/bot/state")
+async def get_state(user: UserPublic = Depends(get_current_user)):
+    state = await _get_state()
+    cfg = await _get_config()
+    prices = {s: market.get_price(s) for s in cfg.symbols}
+    return {
+        "state": state.model_dump(),
+        "config_mode": cfg.mode,
+        "config_enabled": cfg.enabled,
+        "prices": prices,
+    }
+
+
+@api.post("/bot/toggle")
+async def toggle_bot(user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    cfg.enabled = not cfg.enabled
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="bot_toggle",
+                                        details={"enabled": cfg.enabled, "user": user.email}).model_dump())
+    return {"enabled": cfg.enabled}
+
+
+@api.post("/bot/kill-switch")
+async def kill_switch(user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    state = await _get_state()
+    cfg.enabled = False
+    state.kill_switch_engaged = True
+    state.paused_reason = "kill_switch"
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await state_col.update_one({"id": state.id}, {"$set": state.model_dump()}, upsert=True)
+    await bot_runner.force_close_all(reason="kill_switch")
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="kill_switch_engaged",
+                                        details={"user": user.email}).model_dump())
+    return {"kill_switch": True, "all_positions_closed": True}
+
+
+@api.post("/bot/kill-switch/reset")
+async def kill_switch_reset(user: UserPublic = Depends(get_current_user)):
+    state = await _get_state()
+    state.kill_switch_engaged = False
+    state.paused_reason = None
+    await state_col.update_one({"id": state.id}, {"$set": state.model_dump()}, upsert=True)
+    return {"kill_switch": False}
+
+
+@api.post("/bot/mode")
+async def switch_mode(req: ModeSwitchRequest, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    state = await _get_state()
+
+    if req.target_mode == "real":
+        # Require confirmation phrase
+        if req.confirmation_phrase != "JE CONFIRME LE PASSAGE EN REEL":
+            raise HTTPException(400, "Phrase de confirmation requise: 'JE CONFIRME LE PASSAGE EN REEL'")
+        # Require validation period (normalize paper_start to tz-aware UTC)
+        ps = state.paper_start
+        if isinstance(ps, datetime):
+            ps_dt = ps if ps.tzinfo is not None else ps.replace(tzinfo=timezone.utc)
+        else:
+            ps_dt = datetime.fromisoformat(str(ps))
+            if ps_dt.tzinfo is None:
+                ps_dt = ps_dt.replace(tzinfo=timezone.utc)
+        paper_days = (utc_now() - ps_dt).days
+        if paper_days < cfg.paper_validation_days:
+            raise HTTPException(400, f"Validation paper trading insuffisante: {paper_days}/{cfg.paper_validation_days} jours")
+        # Check minimal performance
+        trades = await trades_col.find({"mode": "demo"}, {"_id": 0}).to_list(10000)
+        if len(trades) < 10:
+            raise HTTPException(400, f"Minimum 10 trades demo requis (actuel: {len(trades)})")
+        metrics = compute_metrics(trades, cfg.starting_balance)
+        if metrics["winrate"] < 40:
+            raise HTTPException(400, f"Winrate trop bas pour passage réel: {metrics['winrate']}% (>=40% requis)")
+        state.real_unlocked = True
+
+    cfg.mode = req.target_mode
+    cfg.enabled = False  # always disable on mode switch (require manual re-enable)
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await state_col.update_one({"id": state.id}, {"$set": state.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="mode_switch",
+                                        details={"mode": req.target_mode, "user": user.email}).model_dump())
+    return {"mode": cfg.mode, "real_unlocked": state.real_unlocked}
+
+
+@api.post("/bot/reset-paper")
+async def reset_paper(user: UserPublic = Depends(get_current_user)):
+    """Reset demo balance and clear positions/trades for demo mode."""
+    cfg = await _get_config()
+    if cfg.mode != "demo":
+        raise HTTPException(400, "Reset disponible uniquement en mode demo")
+    state = await _get_state()
+    state.balance = cfg.starting_balance
+    state.equity = cfg.starting_balance
+    state.daily_start_balance = cfg.starting_balance
+    state.realized_pnl = 0.0
+    state.unrealized_pnl = 0.0
+    state.daily_pnl = 0.0
+    state.trades_today = 0
+    state.kill_switch_engaged = False
+    state.paused_reason = None
+    state.paper_start = utc_now()
+    state.last_daily_reset = utc_now()
+    await state_col.update_one({"id": state.id}, {"$set": state.model_dump()}, upsert=True)
+    await positions_col.delete_many({"mode": "demo"})
+    await trades_col.delete_many({"mode": "demo"})
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="paper_reset", details={"user": user.email}).model_dump())
+    return {"reset": True}
+
+
+# --- Risk & Strategy ---
+@api.put("/bot/risk", response_model=BotConfig)
+async def update_risk(risk: RiskConfig, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    cfg.risk = risk
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="risk_updated",
+                                        details={"user": user.email, **risk.model_dump()}).model_dump())
+    return cfg
+
+
+@api.put("/bot/strategy", response_model=BotConfig)
+async def update_strategy(strategy: StrategyConfig, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    cfg.strategy = strategy
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="strategy_updated",
+                                        details={"user": user.email, **strategy.model_dump()}).model_dump())
+    return cfg
+
+
+@api.get("/strategies/list")
+async def strategies_list(user: UserPublic = Depends(get_current_user)):
+    return [{"id": k, "name": v["name"], "description": v["description"]} for k, v in STRATEGIES.items()]
+
+
+# --- Positions & trades ---
+@api.get("/positions/open")
+async def open_positions(user: UserPublic = Depends(get_current_user)):
+    docs = await positions_col.find({"status": "OPEN"}, {"_id": 0}).sort("opened_at", -1).to_list(200)
+    # Add current price & unrealized pnl
+    for d in docs:
+        price = market.get_price(d["symbol"])
+        d["current_price"] = price
+        if price is not None:
+            side = d["side"]
+            entry = d["entry_price"]
+            qty = d["quantity"]
+            if side == "BUY":
+                d["unrealized_pnl"] = round((price - entry) * qty, 2)
+            else:
+                d["unrealized_pnl"] = round((entry - price) * qty, 2)
+        else:
+            d["unrealized_pnl"] = 0.0
+    return docs
+
+
+@api.post("/positions/{position_id}/close")
+async def close_position_manual(position_id: str, user: UserPublic = Depends(get_current_user)):
+    pos = await positions_col.find_one({"id": position_id, "status": "OPEN"}, {"_id": 0})
+    if not pos:
+        raise HTTPException(404, "Position introuvable")
+    price = market.get_price(pos["symbol"]) or pos["entry_price"]
+    side = pos["side"]
+    entry = pos["entry_price"]
+    qty = pos["quantity"]
+    fill = market.execute_order(pos["symbol"], "SELL" if side == "BUY" else "BUY", price)
+    exit_price = fill["fill_price"]
+    pnl = (exit_price - entry) * qty if side == "BUY" else (entry - exit_price) * qty
+    pnl -= fill["fee"]
+    pnl_pct = (pnl / (entry * qty)) * 100 if entry * qty > 0 else 0
+
+    opened_dt = pos["opened_at"] if isinstance(pos["opened_at"], datetime) else datetime.fromisoformat(str(pos["opened_at"]))
+    if opened_dt.tzinfo is None:
+        opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+
+    trade = Trade(
+        symbol=pos["symbol"], side=side, entry_price=entry, exit_price=exit_price,
+        quantity=qty, pnl=round(pnl, 2), pnl_pct=round(pnl_pct, 4),
+        fees=fill["fee"], slippage=fill["slippage"],
+        strategy=pos.get("strategy", "?"), open_reason=pos.get("reason", ""),
+        close_reason="manual_close",
+        opened_at=opened_dt, mode=pos.get("mode", "demo"),
+    )
+    trade.duration_sec = (datetime.now(timezone.utc) - opened_dt).total_seconds()
+    await trades_col.insert_one(trade.model_dump())
+    await positions_col.update_one({"id": position_id}, {"$set": {"status": "CLOSED"}})
+
+    state = await _get_state()
+    state.balance += pnl
+    state.realized_pnl += pnl
+    state.daily_pnl += pnl
+    await state_col.update_one({"id": state.id}, {"$set": state.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="TRADE", event="manual_close",
+                                        details={"id": position_id, "pnl": pnl, "user": user.email}).model_dump())
+    return {"closed": True, "pnl": round(pnl, 2)}
+
+
+@api.get("/trades")
+async def trades_list(limit: int = 100, mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
+    q = {}
+    if mode:
+        q["mode"] = mode
+    docs = await trades_col.find(q, {"_id": 0}).sort("closed_at", -1).to_list(limit)
+    return docs
+
+
+@api.get("/trades/metrics")
+async def trades_metrics(mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    q = {}
+    if mode:
+        q["mode"] = mode
+    docs = await trades_col.find(q, {"_id": 0}).to_list(10000)
+    return compute_metrics(docs, cfg.starting_balance)
+
+
+@api.get("/trades/equity-curve")
+async def equity_curve(mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    q = {}
+    if mode:
+        q["mode"] = mode
+    docs = await trades_col.find(q, {"_id": 0}).sort("closed_at", 1).to_list(10000)
+    eq = cfg.starting_balance
+    curve = [{"ts": None, "equity": eq}]
+    for t in docs:
+        eq += t.get("pnl", 0.0)
+        ts = t.get("closed_at")
+        if isinstance(ts, datetime):
+            ts = ts.isoformat()
+        curve.append({"ts": str(ts), "equity": round(eq, 2)})
+    return curve
+
+
+@api.get("/trades/export")
+async def export_trades(format: str = "csv", mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
+    q = {}
+    if mode:
+        q["mode"] = mode
+    docs = await trades_col.find(q, {"_id": 0}).sort("closed_at", -1).to_list(100000)
+    if format == "json":
+        body = json.dumps(docs, default=str, indent=2)
+        return Response(content=body, media_type="application/json",
+                        headers={"Content-Disposition": "attachment; filename=trades.json"})
+    # CSV
+    buf = io.StringIO()
+    if docs:
+        writer = csv.DictWriter(buf, fieldnames=list(docs[0].keys()))
+        writer.writeheader()
+        for d in docs:
+            writer.writerow({k: (v.isoformat() if isinstance(v, datetime) else v) for k, v in d.items()})
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=trades.csv"})
+
+
+# --- Market data ---
+@api.get("/market/prices")
+async def market_prices(user: UserPublic = Depends(get_current_user)):
+    return {s: {"price": market.get_price(s), "spec": SYMBOL_SPECS[s]} for s in SYMBOL_SPECS}
+
+
+@api.get("/market/candles/{symbol}")
+async def market_candles(symbol: str, n: int = 100, user: UserPublic = Depends(get_current_user)):
+    closes = market.get_closes(symbol, n)
+    return {"symbol": symbol, "closes": closes}
+
+
+# --- Audit logs ---
+@api.get("/audit/logs")
+async def audit_logs(limit: int = 200, level: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
+    q = {}
+    if level:
+        q["level"] = level
+    docs = await audit_col.find(q, {"_id": 0}).sort("ts", -1).to_list(limit)
+    return docs
+
+
+@api.get("/audit/export")
+async def export_audit(format: str = "csv", user: UserPublic = Depends(get_current_user)):
+    docs = await audit_col.find({}, {"_id": 0}).sort("ts", -1).to_list(100000)
+    # Stringify details dict for CSV
+    flat = []
+    for d in docs:
+        flat.append({
+            "ts": d.get("ts").isoformat() if isinstance(d.get("ts"), datetime) else d.get("ts"),
+            "level": d.get("level"),
+            "event": d.get("event"),
+            "details": json.dumps(d.get("details", {}), default=str),
+        })
+    if format == "json":
+        return Response(content=json.dumps(flat, default=str, indent=2), media_type="application/json",
+                        headers={"Content-Disposition": "attachment; filename=audit_logs.json"})
+    buf = io.StringIO()
+    if flat:
+        writer = csv.DictWriter(buf, fieldnames=list(flat[0].keys()))
+        writer.writeheader()
+        writer.writerows(flat)
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=audit_logs.csv"})
+
+
+# --- Cost tracker ---
+@api.get("/costs", response_model=List[CostItem])
+async def costs_list(user: UserPublic = Depends(get_current_user)):
+    docs = await costs_col.find({}, {"_id": 0}).sort("date", -1).to_list(500)
+    return [CostItem(**d) for d in docs]
+
+
+@api.post("/costs", response_model=CostItem)
+async def costs_create(payload: CostItemCreate, user: UserPublic = Depends(get_current_user)):
+    item = CostItem(**payload.model_dump())
+    await costs_col.insert_one(item.model_dump())
+    return item
+
+
+@api.delete("/costs/{cost_id}")
+async def costs_delete(cost_id: str, user: UserPublic = Depends(get_current_user)):
+    res = await costs_col.delete_one({"id": cost_id})
+    if res.deleted_count == 0:
+        raise HTTPException(404, "Coût introuvable")
+    return {"deleted": True}
+
+
+@api.get("/costs/summary")
+async def costs_summary(user: UserPublic = Depends(get_current_user)):
+    docs = await costs_col.find({}, {"_id": 0}).to_list(10000)
+    # Compute monthly equivalent
+    by_cat = {}
+    monthly_total = 0.0
+    once_total = 0.0
+    for d in docs:
+        cat = d.get("category", "other")
+        amt = d.get("amount", 0.0)
+        rec = d.get("recurring", "once")
+        if rec == "monthly":
+            m = amt
+        elif rec == "yearly":
+            m = amt / 12
+        else:
+            m = 0
+            once_total += amt
+        monthly_total += m
+        by_cat[cat] = by_cat.get(cat, 0.0) + m
+    # P&L for rentability vs costs
+    state = await _get_state()
+    return {
+        "monthly_total": round(monthly_total, 2),
+        "yearly_total": round(monthly_total * 12, 2),
+        "one_off_total": round(once_total, 2),
+        "by_category": {k: round(v, 2) for k, v in by_cat.items()},
+        "items_count": len(docs),
+        "current_realized_pnl": round(state.realized_pnl, 2),
+        "net_monthly_profit": round(state.realized_pnl / max(1, 1) - monthly_total, 2),
+    }
+
+
+# --- Backtest ---
+@api.post("/backtest/run", response_model=BacktestResult)
+async def backtest_run(req: BacktestRequest, user: UserPublic = Depends(get_current_user)):
+    """Run a backtest using historical synthetic data from the simulator."""
+    cfg = await _get_config()
+    closes = market.get_closes(req.symbol, req.candles)
+    if len(closes) < 50:
+        raise HTTPException(400, "Pas assez de bougies pour backtester")
+
+    strat = STRATEGIES.get(req.strategy)
+    if not strat:
+        raise HTTPException(400, f"Stratégie inconnue: {req.strategy}")
+
+    balance = req.starting_balance
+    trades: List[Trade] = []
+    open_pos = None
+    spec = SYMBOL_SPECS.get(req.symbol, {"fee_pct": 0.0002})
+
+    for i in range(30, len(closes)):
+        window = closes[: i + 1]
+        price = closes[i]
+        # Manage open position
+        if open_pos:
+            side = open_pos["side"]
+            entry = open_pos["entry"]
+            qty = open_pos["qty"]
+            sl = open_pos["sl"]
+            tp = open_pos["tp"]
+            hit_sl = (side == "BUY" and price <= sl) or (side == "SELL" and price >= sl)
+            hit_tp = (side == "BUY" and price >= tp) or (side == "SELL" and price <= tp)
+            if hit_sl or hit_tp:
+                exit_price = price
+                pnl = (exit_price - entry) * qty if side == "BUY" else (entry - exit_price) * qty
+                fee = abs(exit_price) * spec.get("fee_pct", 0.0002)
+                pnl -= fee
+                pnl_pct = (pnl / (entry * qty)) * 100 if entry * qty > 0 else 0
+                balance += pnl
+                trades.append(Trade(
+                    symbol=req.symbol, side=side, entry_price=entry, exit_price=exit_price,
+                    quantity=qty, pnl=round(pnl, 2), pnl_pct=round(pnl_pct, 4),
+                    fees=fee, slippage=0.0, strategy=req.strategy,
+                    open_reason=open_pos.get("reason", ""),
+                    close_reason="stop_loss" if hit_sl else "take_profit",
+                    opened_at=open_pos["opened_at"], mode="demo",
+                ))
+                open_pos = None
+            else:
+                continue
+
+        # Look for new signal
+        sig, reason = strat["fn"](window, cfg.strategy)
+        if sig is None:
+            continue
+        # Open new position
+        risk_amount = balance * (cfg.risk.capital_allocation_pct / 100.0) * (cfg.risk.risk_per_trade_pct / 100.0)
+        sl_distance = price * (cfg.risk.stop_loss_pct / 100.0)
+        if sl_distance <= 0:
+            continue
+        qty = risk_amount / sl_distance
+        if sig == "BUY":
+            sl = price - sl_distance
+            tp = price + (sl_distance * cfg.risk.risk_reward_ratio)
+        else:
+            sl = price + sl_distance
+            tp = price - (sl_distance * cfg.risk.risk_reward_ratio)
+        open_pos = {
+            "side": sig, "entry": price, "qty": qty, "sl": sl, "tp": tp,
+            "reason": reason, "opened_at": utc_now(),
+        }
+
+    metrics = compute_metrics([t.model_dump() for t in trades], req.starting_balance)
+    return BacktestResult(
+        symbol=req.symbol,
+        strategy=req.strategy,
+        starting_balance=req.starting_balance,
+        ending_balance=round(balance, 2),
+        total_trades=metrics["total_trades"],
+        wins=metrics["wins"],
+        losses=metrics["losses"],
+        winrate=metrics["winrate"],
+        profit_factor=metrics["profit_factor"],
+        max_drawdown_pct=metrics["max_drawdown_pct"],
+        sharpe=metrics["sharpe"],
+        expectancy=metrics["expectancy"],
+        trades=trades[-20:],  # last 20 only
+    )
+
+
+# --- Mount router ---
+app.include_router(api)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -62,14 +621,3 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()

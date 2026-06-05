@@ -1,0 +1,51 @@
+{
+  "summary": "Backend-only testing of the Trading Bot API (FastAPI + MongoDB). Created comprehensive pytest suite in /app/backend/tests/test_backend_api.py covering 27 tests across 12 feature groups: auth (login/register/me/anon-rejection), bot config & state, kill-switch, mode switch (with phrase validation), risk & strategy updates, strategies list (4 strategies), positions/trades/metrics/equity-curve/CSV export, audit logs & JSON export, costs CRUD + summary (all 7 required keys), MT5 credential encryption (AES, password never returned, no cleartext in MongoDB), backtest, market prices for 5 symbols, and bot loop activity. Initial run: 25/27 passed. Found 1 real backend bug (mode-switch 500 due to tz-naive datetime from Mongo) which I fixed in server.py. Final run: 27/27 passed (100%).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/bot/mode (real with phrase)",
+        "issue": "TypeError 'can't subtract offset-naive and offset-aware datetimes' when state.paper_start is loaded from MongoDB (Mongo strips tzinfo). Returned 500 instead of 400. FIXED in /app/backend/server.py switch_mode() by normalizing paper_start to tz-aware UTC before subtracting."
+      },
+      {
+        "endpoint": "passlib/bcrypt",
+        "issue": "passlib warning: 'AttributeError: module bcrypt has no attribute __about__' on startup. Hash/verify still work (login passes), but indicates a bcrypt/passlib version mismatch. Cosmetic but worth upgrading passlib or pinning bcrypt<4."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Confirm tz-fix in /app/backend/server.py switch_mode() (lines ~219-231) is acceptable; consider applying same defensive tz-normalization wherever Mongo-loaded datetimes are subtracted (e.g. close_position_manual already does it, but audit-other handlers may need review).",
+    "Optional: pin bcrypt<4 in /app/backend/requirements.txt to remove passlib warning.",
+    "Frontend uses EXPO_PUBLIC_BACKEND_URL (the system-prompt-required key is EXPO_BACKEND_URL). Pattern works because the file uses EXPO_PUBLIC_BACKEND_URL consistently; just be aware the convention differs from boilerplate."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 617 lines — consider splitting into routers/auth.py, routers/bot.py, routers/trades.py, routers/costs.py etc. once feature growth continues (already >700-line threshold proximity).",
+    "ModeSwitchRequest.confirmation_phrase comment says 'must equal I ACCEPT RISK' but actual check is 'JE CONFIRME LE PASSAGE EN REEL' — update the model comment for clarity (models.py line 181).",
+    "/api/costs/summary 'net_monthly_profit' computes `realized_pnl/max(1,1) - monthly_total` which divides by 1 always (no-op). Likely intended a monthly window divisor; main agent should review the formula.",
+    "MT5 credential encryption working (AES, ciphertext+nonce stored in Mongo, password never returned). Good.",
+    "All endpoints require JWT (verified by test_no_token_rejected) — auth enforcement correct.",
+    "Bot loop confirmed running (BotRunner loop started in logs, audit activity present after enabling)."
+  ],
+  "updated_files": [
+    "/app/backend/server.py (tz-aware fix in switch_mode for paper_start)",
+    "/app/backend/tests/conftest.py (created)",
+    "/app/backend/tests/test_backend_api.py (created)"
+  ],
+  "success_rate": {"backend": "100% (27/27)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "No persistent seed created. Tests use ephemeral TEST_-prefixed data (registered users, TEST_VPS_OVH cost item) cleaned up where applicable. MT5 credentials are written to the admin user document; these are encrypted and overwritten on each save — not flagged for cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend is healthy. Use frontend .env EXPO_PUBLIC_BACKEND_URL for the public URL. Admin credentials: admin@trading.bot / Admin123!. Real-mode switch confirmation phrase is exactly 'JE CONFIRME LE PASSAGE EN REEL'. The mode-switch endpoint previously 500'd due to a tz-naive datetime from Mongo; that has been fixed. Bot loop runs every few seconds; trades may take 30-60s to appear because strategies need candle convergence. MT5 password is encrypted as a {ciphertext, nonce} sub-document in users.mt5_credentials.",
+  "rca_of_issue": "POST /api/bot/mode with target_mode=real returned 500 instead of 400. RCA: state.paper_start is stored in MongoDB as a tz-naive datetime (Mongo drops tzinfo). The existing code `state.paper_start if isinstance(state.paper_start, datetime) else ...replace(tzinfo=utc)` only added tzinfo on the str-branch, not the datetime-branch. utc_now() is tz-aware → TypeError. Fix: always normalize ps_dt to tz-aware UTC before subtraction. Repro: login → POST /api/bot/mode {target_mode: real, confirmation_phrase: 'JE CONFIRME LE PASSAGE EN REEL'}. Mitigation applied in /app/backend/server.py switch_mode()."
+}
