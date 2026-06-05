@@ -7,11 +7,12 @@ import io
 import csv
 import json
 import logging
+import asyncio
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Response
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 
@@ -39,6 +40,8 @@ from services.bot_runner import bot_runner
 from services.paper_engine import market, SYMBOL_SPECS
 from services.strategies import STRATEGIES
 from services.metrics import compute_metrics
+from services.mt5_broker import mt5_connector
+from services.ws_hub import ws_hub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("main")
@@ -610,6 +613,171 @@ async def backtest_run(req: BacktestRequest, user: UserPublic = Depends(get_curr
         expectancy=metrics["expectancy"],
         trades=trades[-20:],  # last 20 only
     )
+
+
+# --- MT5 Real Connection ---
+@api.get("/mt5/status")
+async def mt5_status(user: UserPublic = Depends(get_current_user)):
+    """Returns MT5 connector status and account info if connected."""
+    status_dict = mt5_connector.status()
+    account = await mt5_connector.get_account_info() if mt5_connector.connected else None
+    return {"status": status_dict, "account": account}
+
+
+@api.post("/mt5/connect")
+async def mt5_connect(user: UserPublic = Depends(get_current_user)):
+    """Attempt to connect to MT5 using the credentials saved in user profile."""
+    doc = await users_col.find_one({"id": user.id}, {"_id": 0})
+    if not doc or "mt5_credentials" not in doc:
+        raise HTTPException(400, "Aucun identifiant MT5 enregistré. Sauvegardez d'abord vos identifiants.")
+    creds = json.loads(decrypt_str(doc["mt5_credentials"]))
+    result = await mt5_connector.connect(
+        login=creds["login"], password=creds["password"],
+        server=creds["server"], broker=creds.get("broker"),
+    )
+    await audit_col.insert_one(AuditLog(
+        level="SYSTEM", event="mt5_connect_attempt",
+        details={"user": user.email, "connected": result["connected"], "mode": result["mode"], "error": result.get("last_error")},
+    ).model_dump())
+    return result
+
+
+@api.post("/mt5/disconnect")
+async def mt5_disconnect(user: UserPublic = Depends(get_current_user)):
+    await mt5_connector.disconnect()
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="mt5_disconnect", details={"user": user.email}).model_dump())
+    return mt5_connector.status()
+
+
+@api.get("/mt5/live")
+async def mt5_live(user: UserPublic = Depends(get_current_user)):
+    """Live snapshot: account + positions from MT5 (if connected)."""
+    if not mt5_connector.connected:
+        return {"connected": False, "account": None, "positions": [], "status": mt5_connector.status()}
+    account = await mt5_connector.get_account_info()
+    positions = await mt5_connector.get_positions()
+    return {
+        "connected": True,
+        "account": account,
+        "positions": positions,
+        "status": mt5_connector.status(),
+    }
+
+
+# --- WebSocket: live state stream ---
+@app.websocket("/api/ws")
+async def websocket_endpoint(ws: WebSocket, token: str):
+    """Stream live state, positions and prices.
+
+    Auth via query param `token` (JWT). Broadcasts every ~1s.
+    """
+    ok = await ws_hub.connect(ws, token)
+    if not ok:
+        return
+    try:
+        # Send initial snapshot immediately
+        await _send_snapshot(ws)
+        # Listen for client pings (keepalive)
+        while True:
+            try:
+                msg = await asyncio.wait_for(ws.receive_text(), timeout=2.0)
+                if msg == "ping":
+                    await ws.send_text(json.dumps({"type": "pong"}))
+            except asyncio.TimeoutError:
+                # Send periodic update
+                await _send_snapshot(ws)
+            except WebSocketDisconnect:
+                break
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await ws_hub.disconnect(ws)
+
+
+async def _send_snapshot(ws: WebSocket):
+    """Send a full snapshot to a single client."""
+    try:
+        cfg = await _get_config()
+        state = await _get_state()
+        prices = {s: market.get_price(s) for s in cfg.symbols}
+        # Open positions with current price + unrealized PnL
+        positions = await positions_col.find({"status": "OPEN"}, {"_id": 0}).to_list(50)
+        for p in positions:
+            price = market.get_price(p["symbol"])
+            p["current_price"] = price
+            if price is not None:
+                if p["side"] == "BUY":
+                    p["unrealized_pnl"] = round((price - p["entry_price"]) * p["quantity"], 2)
+                else:
+                    p["unrealized_pnl"] = round((p["entry_price"] - price) * p["quantity"], 2)
+            else:
+                p["unrealized_pnl"] = 0.0
+            if isinstance(p.get("opened_at"), datetime):
+                p["opened_at"] = p["opened_at"].isoformat()
+
+        mt5_status_dict = mt5_connector.status()
+        mt5_account = await mt5_connector.get_account_info() if mt5_connector.connected else None
+
+        payload = {
+            "type": "snapshot",
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "data": {
+                "state": state.model_dump(),
+                "config_mode": cfg.mode,
+                "config_enabled": cfg.enabled,
+                "prices": prices,
+                "positions": positions,
+                "mt5_status": mt5_status_dict,
+                "mt5_account": mt5_account,
+            },
+        }
+        await ws.send_text(json.dumps(payload, default=str))
+    except Exception as e:
+        logger.exception("send_snapshot error: %s", e)
+
+
+# --- Background WS broadcast loop ---
+async def _ws_broadcast_loop():
+    """Broadcast snapshot to all connected clients every 1s."""
+    while True:
+        await asyncio.sleep(1.0)
+        if not ws_hub.clients:
+            continue
+        try:
+            cfg = await _get_config()
+            state = await _get_state()
+            prices = {s: market.get_price(s) for s in cfg.symbols}
+            positions = await positions_col.find({"status": "OPEN"}, {"_id": 0}).to_list(50)
+            for p in positions:
+                price = market.get_price(p["symbol"])
+                p["current_price"] = price
+                if price is not None:
+                    if p["side"] == "BUY":
+                        p["unrealized_pnl"] = round((price - p["entry_price"]) * p["quantity"], 2)
+                    else:
+                        p["unrealized_pnl"] = round((p["entry_price"] - price) * p["quantity"], 2)
+                else:
+                    p["unrealized_pnl"] = 0.0
+                if isinstance(p.get("opened_at"), datetime):
+                    p["opened_at"] = p["opened_at"].isoformat()
+            mt5_status_dict = mt5_connector.status()
+            mt5_account = await mt5_connector.get_account_info() if mt5_connector.connected else None
+            await ws_hub.broadcast("snapshot", {
+                "state": state.model_dump(),
+                "config_mode": cfg.mode,
+                "config_enabled": cfg.enabled,
+                "prices": prices,
+                "positions": positions,
+                "mt5_status": mt5_status_dict,
+                "mt5_account": mt5_account,
+            })
+        except Exception as e:
+            logger.exception("ws_broadcast error: %s", e)
+
+
+@app.on_event("startup")
+async def start_broadcast():
+    asyncio.create_task(_ws_broadcast_loop())
 
 
 # --- Mount router ---

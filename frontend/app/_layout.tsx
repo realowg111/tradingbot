@@ -6,6 +6,7 @@ import { StatusBar } from "expo-status-bar";
 
 import { useIconFonts } from "@/src/hooks/use-icon-fonts";
 import { AuthProvider } from "@/src/context/AuthContext";
+import { ToastProvider } from "@/src/components/Toast";
 
 SplashScreen.preventAutoHideAsync();
 
@@ -22,10 +23,12 @@ export default function RootLayout() {
 
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <StatusBar style="dark" />
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F8FAFC" } }} />
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <StatusBar style="dark" />
+          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: "#F8FAFC" } }} />
+        </AuthProvider>
+      </ToastProvider>
     </SafeAreaProvider>
   );
 }

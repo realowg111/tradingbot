@@ -1,0 +1,54 @@
+{
+  "summary": "Backend-only iteration 2 testing of new MT5 connector + WebSocket live stream. Added /app/backend/tests/test_mt5_ws.py with 7 new tests covering: GET /api/mt5/status shape (has_native_lib=false on Linux, account=null when disconnected), POST /api/mt5/connect without saved creds returns 400 (new user), POST /api/mt5/connect with saved creds fails gracefully (connected=false + last_error since neither native lib nor MT5_BRIDGE_URL configured), POST /api/mt5/disconnect always 200, GET /api/mt5/live disconnected shape (positions=[], connected=false), WS /api/ws rejects invalid JWT with close code 4401, WS /api/ws accepts valid JWT and immediately delivers a snapshot containing state, prices (5 symbols), positions, mt5_status. Also added pytest.ini with asyncio_mode=auto and installed pytest-asyncio. Full regression: 34/34 PASSED (27 previous + 7 new) in 55.7s.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "passlib/bcrypt",
+        "issue": "Cosmetic only: 'AttributeError: module bcrypt has no attribute __about__' on passlib import. Login/registration still work (verified). Same as iteration_1. Pin bcrypt<4 or upgrade passlib to silence."
+      },
+      {
+        "endpoint": "WebSocket /api/ws auth scheme",
+        "issue": "Token is passed as a URL query parameter (?token=JWT). Query strings can be logged by proxies and uvicorn access logs. Consider using the Sec-WebSocket-Protocol subprotocol header or a short-lived ticket for production. Functionally correct."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/test_mt5_ws.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/pytest.ini",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Nothing blocking. New MT5 + WebSocket endpoints all behave correctly on Linux (graceful unavailability).",
+    "Optional: pin bcrypt<4 in /app/backend/requirements.txt to remove passlib warning.",
+    "Optional: harden WS auth by avoiding token-in-query in favour of a one-shot ticket endpoint or Sec-WebSocket-Protocol header.",
+    "Recommend a unit-level reconnect-loop test once MT5_BRIDGE_URL is provided in a future iteration (currently mode='unavailable' so the auto-reconnect loop short-circuits)."
+  ],
+  "critical_code_review_comments": [
+    "services/mt5_broker.py disconnect() does not reset self.mode='unavailable' nor clear self.last_error / self.last_heartbeat; status() will keep returning the previous mode after disconnect. Minor UX issue, no functional bug for current tests.",
+    "services/mt5_broker.py: self._client = httpx.AsyncClient() is created at module import and never closed. On app shutdown it should be aclose()'d to avoid resource warning logs.",
+    "server.py is now ~792 lines (>700-line threshold). Split into routers/{auth,bot,trades,mt5,ws}.py — flagged again from iteration 1.",
+    "server.py /api/ws (WebSocket) is registered on the raw `app`, not on the `api` router. This works because the path is hard-coded to /api/ws but is inconsistent with the rest of the codebase pattern.",
+    "Two startup handlers are defined (on_startup + start_broadcast). They both run, but it's cleaner to register the broadcast task inside on_startup to keep startup ordering explicit.",
+    "_send_snapshot is duplicated logic with _ws_broadcast_loop (DRY violation, ~25 LOC duplicated). Extract into a shared `_build_snapshot()` builder.",
+    "ws_hub.connect: ws.close(code=4401) is called BEFORE ws.accept() — this works in current FastAPI/Starlette by sending an HTTP 403 during handshake but the official ASGI spec recommends accept then close. The test now tolerates both InvalidStatus(403) and ConnectionClosed(4401)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_mt5_ws.py (created — 7 new tests)",
+    "/app/backend/tests/pytest.ini (created — asyncio_mode=auto)"
+  ],
+  "success_rate": {"backend": "100% (34/34, incl. 7 new MT5/WS tests)", "frontend": "not tested (backend-only request)"},
+  "seed_data_creation": "No persistent seed. test_connect_without_credentials_returns_400 creates an ephemeral test_mt5_*@example.com user (registered via /api/auth/register) without MT5 credentials — not cleaned up but harmless. test_connect_with_saved_credentials_fails_gracefully re-saves TEST_99999999 MT5 credentials on the admin user (encrypted, overwrites previous TEST_42424242 from regression test).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend healthy at 34/34. MT5 connector on Linux returns has_native_lib=false / mode=unavailable / last_error set — this is the EXPECTED graceful path (no native MT5 lib on Linux, no MT5_BRIDGE_URL configured). WS endpoint is at /api/ws?token=<JWT>; invalid token closes with 4401 (handshake may surface as HTTP 403 InvalidStatus depending on websockets client version — test handles both). Snapshot data shape verified to include state, prices (5 symbols), positions, mt5_status. To test future bridge-mode work, set MT5_BRIDGE_URL in backend/.env to a mock httpx-respx server. Admin: admin@trading.bot / Admin123!. Public URL: EXPO_PUBLIC_BACKEND_URL from /app/frontend/.env.",
+  "rca_of_issue": "No new bug found this iteration. All 7 new tests passed on first execution. Iteration 1's tz-aware fix in switch_mode() still holds."
+}
