@@ -520,7 +520,7 @@ async def costs_summary(user: UserPublic = Depends(get_current_user)):
         "by_category": {k: round(v, 2) for k, v in by_cat.items()},
         "items_count": len(docs),
         "current_realized_pnl": round(state.realized_pnl, 2),
-        "net_monthly_profit": round(state.realized_pnl / max(1, 1) - monthly_total, 2),
+        "net_monthly_profit": round(state.realized_pnl - monthly_total, 2),
     }
 
 

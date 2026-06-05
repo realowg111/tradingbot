@@ -178,7 +178,7 @@ class CostItemCreate(BaseModel):
 # ---------- Mode switch ----------
 class ModeSwitchRequest(BaseModel):
     target_mode: Literal["demo", "real"]
-    confirmation_phrase: Optional[str] = None  # must equal "I ACCEPT RISK" for real
+    confirmation_phrase: Optional[str] = None  # must equal "JE CONFIRME LE PASSAGE EN REEL" for real
 
 
 # ---------- Backtest ----------
