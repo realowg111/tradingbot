@@ -1,39 +1,48 @@
-# Trading Bot — PRD
+# Trading Bot — PRD (v2)
 
 ## Vision
-Console mobile professionnelle (Expo) + backend FastAPI 24/7 pour bot de trading automatisé multi-marchés (Forex/CFD via MT5 — initialement simulé), avec validation manuelle pour le passage en mode réel.
+Console fintech mobile + backend FastAPI 24/7 pour bot de trading automatisé multi-marchés (Forex/CFD via MT5), avec live WebSocket, design pro et architecture MT5 pluggable.
 
 ## Architecture
-- **Frontend** : Expo Router (mobile + web), JWT in expo-secure-store, polling 3s pour temps réel
-- **Backend** : FastAPI + Motor (MongoDB async), JWT bcrypt, AES-256-GCM pour credentials MT5
-- **Bot Engine** : asyncio task loop (2s tick) — simulateur de marché interne (mock MT5) avec random walk + spikes
-- **Marchés simulés** : EURUSD, GBPUSD, XAUUSD, US100, BTCUSD (Forex + CFD)
-- **VPS** : scripts d'installation Ubuntu/Debian (systemd + nginx + UFW + fail2ban) dans `/app/scripts/vps/`
+- **Frontend** : Expo Router (mobile + web), JWT in expo-secure-store, **WebSocket live data** avec fallback polling
+- **Backend** : FastAPI + Motor (MongoDB async), JWT bcrypt, AES-256-GCM, **WS broadcast 1Hz**
+- **Bot Engine** : asyncio task loop (2s tick) — simulateur de marché interne + connector MT5 pluggable
+- **MT5 Real** : `services/mt5_broker.py` — utilise lib `MetaTrader5` (Windows) OU bridge HTTP (agent Windows + backend Linux). Auto-reconnexion 30s.
+- **Marchés simulés** : EURUSD, GBPUSD, XAUUSD, US100, BTCUSD
+- **VPS** : scripts d'installation Ubuntu/Debian + agent MT5 Windows dans `/app/scripts/`
 
-## Modules implémentés
-1. **Auth** : register/login JWT, admin seedé, AES pour MT5 creds
-2. **Bot Control** : ON/OFF, Kill Switch (ferme toutes positions), reset paper
-3. **Mode Demo/Réel** : validation manuelle obligatoire (phrase + 7j paper + 10 trades + winrate ≥ 40%)
-4. **Stratégies** : RSI, EMA/MACD, Bollinger, Multi-indicateurs (vote pondéré)
-5. **Risk Manager** : SL/TP, position sizing, daily drawdown, max trades/jour, max positions, volatility pause
-6. **Trades & Métriques** : winrate, profit factor, expectancy, Sharpe, max drawdown, equity curve
-7. **Audit Logs** : SIGNAL/TRADE/RISK/SYSTEM/ERROR, export CSV/JSON
-8. **Cost Tracker** : VPS/API/data/maintenance, calcul mensualisé, P&L net
-9. **Backtesting** : sur ticks synthétiques, frais + slippage
-10. **MT5** : credentials chiffrés AES-256, UI dédiée (réel activable après validation)
+## Endpoints v2 ajoutés
+- `GET /api/mt5/status` — état connecteur + compte live
+- `POST /api/mt5/connect` — tentative connexion réelle MT5
+- `POST /api/mt5/disconnect` — déconnexion
+- `GET /api/mt5/live` — snapshot live (account + positions)
+- `WS /api/ws?token=JWT` — broadcast snapshot toutes les 1s : state + positions + prices + mt5_status
 
-## Sécurité
-- JWT signé HS256
-- bcrypt pour passwords
-- AES-256-GCM pour MT5 credentials (nonce + ciphertext base64 en BDD)
-- Tokens en expo-secure-store côté client (Keychain iOS / EncryptedSharedPreferences Android)
-- CORS configuré
-- Kill Switch d'urgence + validation manuelle obligatoire pour le mode réel
+## UI refonte
+- **Hero card sombre** (primary color) avec équity géante + bouton ON/OFF intégré (gros bouton power)
+- **Header sticky** avec 3 pills (mode démo/réel, bot actif/arrêté, MT5 connecté/simulé) + indicateur LIVE WS
+- **Sparkline équity** en miniature dans le hero
+- **Stat tiles** avec icônes colorées (P&L jour, winrate, trades)
+- **Positions card** avec barre verticale colorée (vert=BUY, rouge=SELL)
+- **Metrics grid** sur 2 lignes (winrate, profit factor, sharpe, drawdown, expectancy, W/L)
+- **Markets card** avec live dots
+- **Toast notifications** pour événements (bot ON/OFF, MT5 connect, kill switch, etc.)
+- **MT5 screen** redesigné : status card avec actions Connect/Disconnect + grid live (balance, equity, margin, profit) + guide bridge
 
-## Roadmap (post-MVP)
-- Connecteur MT5 réel (via bridge Windows ou Wine)
-- WebSockets pour streaming temps réel (au lieu de polling)
-- IA d'optimisation paramétrique (genetic algorithm)
-- Détection de tendance via ML léger
-- Multi-utilisateurs avec isolation des bots
-- Notifications push (sur demande)
+## Sécurité (préservée)
+- JWT signé HS256, expo-secure-store
+- bcrypt passwords + AES-256-GCM credentials MT5
+- WS auth via JWT en query param (à durcir avec header sur prod)
+- Mode trade-only, jamais de retraits
+- Kill Switch d'urgence + validation manuelle Demo→Réel
+
+## Tests
+- **Backend** : 34/34 passing (27 regression + 7 nouveaux MT5/WS)
+- **Frontend** : DOM élements présents, lint OK, polling fallback fonctionnel
+
+## Roadmap future
+- Splitter `server.py` (792 lignes) en routers (auth, bot, trades, mt5, ws)
+- Tests E2E Playwright pour l'UI mobile
+- Notifications push (Emergent-managed) sur événements bot critiques
+- IA d'optimisation génétique des paramètres
+- Smart business : Marketplace de stratégies (revenus récurrents)
