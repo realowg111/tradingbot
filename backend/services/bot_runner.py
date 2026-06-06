@@ -55,14 +55,11 @@ class BotRunner:
         cfg = await self._get_config()
         state = await self._get_state()
 
-        # Daily reset
+        # Daily reset (mutates state in-place)
         await self._daily_reset(state)
 
-        # Manage open positions: check SL/TP
+        # Manage open positions: check SL/TP (mutates state in-place)
         await self._manage_positions(cfg, state)
-
-        # Refresh state (positions may have changed)
-        state = await self._get_state()
 
         # Skip new trades if bot disabled or paused or kill switch
         if not cfg.enabled or state.kill_switch_engaged:
@@ -75,18 +72,12 @@ class BotRunner:
             if state.paused_reason != "daily_drawdown":
                 await self._log("RISK", "daily_drawdown_hit", {"dd_pct": dd_pct})
                 state.paused_reason = "daily_drawdown"
-                await self._update_state(state)
+            await self._update_state(state)
             return
 
         # Max trades per day
         if state.trades_today >= cfg.risk.max_trades_per_day:
             state.paused_reason = "max_trades_per_day"
-            await self._update_state(state)
-            return
-
-        # Max open positions
-        open_count = await positions_col.count_documents({"status": "OPEN", "mode": cfg.mode})
-        if open_count >= cfg.risk.max_open_positions:
             await self._update_state(state)
             return
 
@@ -98,8 +89,12 @@ class BotRunner:
 
         state.paused_reason = None
 
-        # Run strategies per symbol
+        # Run strategies per symbol (state is mutated in-place by _open_position)
         for symbol in cfg.symbols:
+            # Re-check max open positions inside loop (since we may open more)
+            open_count = await positions_col.count_documents({"status": "OPEN", "mode": cfg.mode})
+            if open_count >= cfg.risk.max_open_positions:
+                break
             # Skip if we already have a position open on this symbol & mode
             existing = await positions_col.find_one({"symbol": symbol, "status": "OPEN", "mode": cfg.mode})
             if existing:
@@ -143,9 +138,8 @@ class BotRunner:
             strat_used = ",".join(sid for sid, _ in chosen)
             reason = " | ".join(r for _, r in chosen)
 
-            # Open position
+            # Open position (mutates state in-place: balance fee, trades_today)
             await self._open_position(cfg, state, symbol, side, strat_used, reason)
-            state = await self._get_state()
 
         await self._update_state(state)
 
