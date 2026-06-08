@@ -11,7 +11,8 @@ import { useAuth } from "@/src/context/AuthContext";
 type Item = { id: string; icon: keyof typeof Ionicons.glyphMap; label: string; description: string; href: string; testId: string };
 
 const items: Item[] = [
-  { id: "risk", icon: "shield-checkmark-outline", label: "Gestion du risque", description: "SL, TP, drawdown, sizing, ratio R/R", href: "/risk", testId: "more-risk" },
+  { id: "risk", icon: "shield-checkmark-outline", label: "Gestion du risque", description: "SL, TP, drawdown, sizing, ratio R/R, validation, live MT5", href: "/risk", testId: "more-risk" },
+  { id: "system", icon: "pulse-outline", label: "Santé du serveur", description: "CPU, RAM, disque, services, mise à jour auto", href: "/system", testId: "more-system" },
   { id: "costs", icon: "cash-outline", label: "Coûts infrastructure", description: "VPS, API, données, maintenance", href: "/costs", testId: "more-costs" },
   { id: "audit", icon: "document-text-outline", label: "Logs d'audit", description: "Toutes les décisions du bot", href: "/audit", testId: "more-audit" },
   { id: "mt5", icon: "lock-closed-outline", label: "Connexion MT5", description: "Identifiants chiffrés AES-256", href: "/mt5", testId: "more-mt5" },

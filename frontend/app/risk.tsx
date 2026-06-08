@@ -36,6 +36,17 @@ export default function RiskSettings() {
     setBusy(true); setError(null); setSuccess(false);
     try {
       await apiPut("/bot/risk", config.risk);
+      // Also persist strategy + top-level paper validation fields via config update
+      // (we PUT strategy too so paper_validation fields get saved via re-fetch)
+      await apiPut("/bot/strategy", config.strategy);
+      // Persist config-level toggles (paper_validation_*, live_mt5_trading_enabled)
+      await apiPost("/bot/config-flags", {
+        paper_validation_enabled: config.paper_validation_enabled,
+        paper_validation_days: config.paper_validation_days,
+        paper_validation_min_trades: config.paper_validation_min_trades,
+        paper_validation_min_winrate: config.paper_validation_min_winrate,
+        live_mt5_trading_enabled: config.live_mt5_trading_enabled,
+      });
       setSuccess(true);
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
@@ -94,6 +105,60 @@ export default function RiskSettings() {
         </Card>
 
         <Button title="Enregistrer la gestion du risque" onPress={save} loading={busy} testID="risk-save-button" icon="save" style={{ marginTop: spacing.md }} />
+
+        {/* Validation passage en mode réel - configurable */}
+        <SectionTitle>Validation passage en mode RÉEL</SectionTitle>
+        <Card>
+          <Text style={styles.helperText}>
+            Garde-fou avant d'activer le capital réel. Configurez ou désactivez complètement la validation.
+          </Text>
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.switchLabel}>Validation paper trading activée</Text>
+              <Text style={styles.switchHint}>Si désactivée, passage direct en réel possible</Text>
+            </View>
+            <Switch
+              testID="validation-enabled-switch"
+              value={config.paper_validation_enabled}
+              onValueChange={(v) => { setConfig((c: any) => ({ ...c, paper_validation_enabled: v })); setSuccess(false); }}
+              trackColor={{ false: colors.borderStrong, true: colors.primary }}
+            />
+          </View>
+          {config.paper_validation_enabled ? (
+            <View style={{ marginTop: spacing.md }}>
+              <Input label="Jours de paper trading minimum" value={`${config.paper_validation_days}`} onChangeText={(v) => { const n = parseInt(v, 10); if (!isNaN(n)) { setConfig((c: any) => ({ ...c, paper_validation_days: n })); setSuccess(false); } }} keyboardType="numeric" testID="validation-days-input" />
+              <Input label="Trades démo minimum" value={`${config.paper_validation_min_trades}`} onChangeText={(v) => { const n = parseInt(v, 10); if (!isNaN(n)) { setConfig((c: any) => ({ ...c, paper_validation_min_trades: n })); setSuccess(false); } }} keyboardType="numeric" testID="validation-trades-input" />
+              <Input label="Winrate minimum (%)" value={`${config.paper_validation_min_winrate}`} onChangeText={(v) => { const n = parseFloat(v); if (!isNaN(n)) { setConfig((c: any) => ({ ...c, paper_validation_min_winrate: n })); setSuccess(false); } }} keyboardType="numeric" testID="validation-winrate-input" />
+            </View>
+          ) : (
+            <View style={styles.warnBox}>
+              <Ionicons name="warning" size={16} color={colors.warning} />
+              <Text style={styles.warnText}>Validation désactivée : tu pourras passer en RÉEL immédiatement après la phrase de confirmation. Utilise avec précaution.</Text>
+            </View>
+          )}
+        </Card>
+
+        {/* Live MT5 trading toggle */}
+        <SectionTitle>Trading live MT5</SectionTitle>
+        <Card>
+          <Text style={styles.helperText}>
+            Quand activé : le bot place les ordres directement sur MT5 (visibles live dans ton terminal MT5). Nécessite MT5 connecté + mode RÉEL + capital débloqué.
+          </Text>
+          <View style={styles.switchRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.switchLabel}>Routage des ordres vers MT5</Text>
+              <Text style={styles.switchHint}>Sinon : exécution simulée (paper trading)</Text>
+            </View>
+            <Switch
+              testID="live-mt5-switch"
+              value={config.live_mt5_trading_enabled}
+              onValueChange={(v) => { setConfig((c: any) => ({ ...c, live_mt5_trading_enabled: v })); setSuccess(false); }}
+              trackColor={{ false: colors.borderStrong, true: colors.success }}
+            />
+          </View>
+        </Card>
+
+        <Button title="Enregistrer tous les paramètres" onPress={save} loading={busy} testID="risk-save-all-button" icon="save" style={{ marginTop: spacing.md }} variant="primary" />
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
     </SafeAreaView>
@@ -111,4 +176,7 @@ const styles = StyleSheet.create({
   switchHint: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   errBox: { backgroundColor: colors.dangerBg, padding: 10, borderRadius: 8, marginTop: spacing.sm },
   okBox: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.successBg, padding: 10, borderRadius: 8, marginTop: spacing.sm },
+  helperText: { fontSize: 12, color: colors.textSecondary, lineHeight: 18, marginBottom: spacing.md },
+  warnBox: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: spacing.md, padding: 10, backgroundColor: colors.warningBg, borderColor: "#FCD34D", borderWidth: 1, borderRadius: 8 },
+  warnText: { color: "#92400E", fontSize: 12, flex: 1, lineHeight: 18 },
 });

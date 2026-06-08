@@ -6,12 +6,17 @@ import os
 import io
 import csv
 import json
+import time
 import logging
 import asyncio
+import platform
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+import psutil
+from pydantic import BaseModel
 from fastapi import FastAPI, APIRouter, Depends, HTTPException, status, Response, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
@@ -223,33 +228,33 @@ async def switch_mode(req: ModeSwitchRequest, user: UserPublic = Depends(get_cur
         # Require confirmation phrase
         if req.confirmation_phrase != "JE CONFIRME LE PASSAGE EN REEL":
             raise HTTPException(400, "Phrase de confirmation requise: 'JE CONFIRME LE PASSAGE EN REEL'")
-        # Require validation period (normalize paper_start to tz-aware UTC)
-        ps = state.paper_start
-        if isinstance(ps, datetime):
-            ps_dt = ps if ps.tzinfo is not None else ps.replace(tzinfo=timezone.utc)
-        else:
-            ps_dt = datetime.fromisoformat(str(ps))
-            if ps_dt.tzinfo is None:
-                ps_dt = ps_dt.replace(tzinfo=timezone.utc)
-        paper_days = (utc_now() - ps_dt).days
-        if paper_days < cfg.paper_validation_days:
-            raise HTTPException(400, f"Validation paper trading insuffisante: {paper_days}/{cfg.paper_validation_days} jours")
-        # Check minimal performance
-        trades = await trades_col.find({"mode": "demo"}, {"_id": 0}).to_list(10000)
-        if len(trades) < 10:
-            raise HTTPException(400, f"Minimum 10 trades demo requis (actuel: {len(trades)})")
-        metrics = compute_metrics(trades, cfg.starting_balance)
-        if metrics["winrate"] < 40:
-            raise HTTPException(400, f"Winrate trop bas pour passage réel: {metrics['winrate']}% (>=40% requis)")
+        # Configurable paper validation gates (can be fully disabled)
+        if cfg.paper_validation_enabled:
+            ps = state.paper_start
+            if isinstance(ps, datetime):
+                ps_dt = ps if ps.tzinfo is not None else ps.replace(tzinfo=timezone.utc)
+            else:
+                ps_dt = datetime.fromisoformat(str(ps))
+                if ps_dt.tzinfo is None:
+                    ps_dt = ps_dt.replace(tzinfo=timezone.utc)
+            paper_days = (utc_now() - ps_dt).days
+            if paper_days < cfg.paper_validation_days:
+                raise HTTPException(400, f"Validation paper trading insuffisante: {paper_days}/{cfg.paper_validation_days} jours (modifiable dans Risque)")
+            trades = await trades_col.find({"mode": "demo"}, {"_id": 0}).to_list(10000)
+            if len(trades) < cfg.paper_validation_min_trades:
+                raise HTTPException(400, f"Min {cfg.paper_validation_min_trades} trades demo requis (actuel: {len(trades)})")
+            metrics = compute_metrics(trades, cfg.starting_balance)
+            if metrics["winrate"] < cfg.paper_validation_min_winrate:
+                raise HTTPException(400, f"Winrate {metrics['winrate']}% < {cfg.paper_validation_min_winrate}% requis")
         state.real_unlocked = True
 
     cfg.mode = req.target_mode
-    cfg.enabled = False  # always disable on mode switch (require manual re-enable)
+    cfg.enabled = False
     cfg.updated_at = utc_now()
     await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
     await state_col.update_one({"id": state.id}, {"$set": state.model_dump()}, upsert=True)
     await audit_col.insert_one(AuditLog(level="SYSTEM", event="mode_switch",
-                                        details={"mode": req.target_mode, "user": user.email}).model_dump())
+                                        details={"mode": req.target_mode, "user": user.email, "validation_enabled": cfg.paper_validation_enabled}).model_dump())
     return {"mode": cfg.mode, "real_unlocked": state.real_unlocked}
 
 
@@ -298,6 +303,28 @@ async def update_strategy(strategy: StrategyConfig, user: UserPublic = Depends(g
     await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
     await audit_col.insert_one(AuditLog(level="SYSTEM", event="strategy_updated",
                                         details={"user": user.email, **strategy.model_dump()}).model_dump())
+    return cfg
+
+
+class ConfigFlagsIn(BaseModel):
+    paper_validation_enabled: Optional[bool] = None
+    paper_validation_days: Optional[int] = None
+    paper_validation_min_trades: Optional[int] = None
+    paper_validation_min_winrate: Optional[float] = None
+    live_mt5_trading_enabled: Optional[bool] = None
+
+
+@api.post("/bot/config-flags", response_model=BotConfig)
+async def update_config_flags(flags: ConfigFlagsIn, user: UserPublic = Depends(get_current_user)):
+    """Update top-level config flags (validation gates + live MT5 trading toggle)."""
+    cfg = await _get_config()
+    data = flags.model_dump(exclude_none=True)
+    for k, v in data.items():
+        setattr(cfg, k, v)
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="config_flags_updated",
+                                        details={"user": user.email, **data}).model_dump())
     return cfg
 
 
@@ -613,6 +640,103 @@ async def backtest_run(req: BacktestRequest, user: UserPublic = Depends(get_curr
         expectancy=metrics["expectancy"],
         trades=trades[-20:],  # last 20 only
     )
+
+
+# --- System Health (VPS monitoring) ---
+_BOOT_TIME = time.time()
+
+
+@api.get("/system/health")
+async def system_health(user: UserPublic = Depends(get_current_user)):
+    """Return live system metrics: CPU, RAM, disk, uptime, services status."""
+    try:
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        cpu_count = psutil.cpu_count(logical=True)
+        mem = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+        net = psutil.net_io_counters()
+        boot = psutil.boot_time()
+        uptime_sec = time.time() - boot
+        load_avg = list(psutil.getloadavg()) if hasattr(psutil, "getloadavg") else [0, 0, 0]
+    except Exception as e:
+        raise HTTPException(500, f"psutil error: {e}")
+
+    # MongoDB ping
+    mongo_ok = False
+    try:
+        from database import client
+        await client.admin.command("ping")
+        mongo_ok = True
+    except Exception:
+        mongo_ok = False
+
+    # Bot loop alive ?
+    bot_alive = bot_runner.running and bot_runner.task is not None and not bot_runner.task.done()
+    backend_uptime_sec = time.time() - _BOOT_TIME
+
+    return {
+        "platform": {
+            "system": platform.system(),
+            "release": platform.release(),
+            "python": platform.python_version(),
+            "hostname": platform.node(),
+        },
+        "cpu": {
+            "percent": cpu_percent,
+            "count": cpu_count,
+            "load_avg": load_avg,
+        },
+        "memory": {
+            "total_mb": round(mem.total / 1024 / 1024, 1),
+            "used_mb": round(mem.used / 1024 / 1024, 1),
+            "available_mb": round(mem.available / 1024 / 1024, 1),
+            "percent": mem.percent,
+        },
+        "disk": {
+            "total_gb": round(disk.total / 1024 / 1024 / 1024, 1),
+            "used_gb": round(disk.used / 1024 / 1024 / 1024, 1),
+            "free_gb": round(disk.free / 1024 / 1024 / 1024, 1),
+            "percent": disk.percent,
+        },
+        "network": {
+            "bytes_sent": net.bytes_sent,
+            "bytes_recv": net.bytes_recv,
+        },
+        "uptime": {
+            "system_seconds": int(uptime_sec),
+            "backend_seconds": int(backend_uptime_sec),
+        },
+        "services": {
+            "mongodb": mongo_ok,
+            "bot_loop": bot_alive,
+            "mt5_connected": mt5_connector.connected,
+            "mt5_mode": mt5_connector.mode,
+            "ws_clients": len(ws_hub.clients),
+        },
+    }
+
+
+@api.post("/system/update")
+async def system_update(user: UserPublic = Depends(get_current_user)):
+    """Pull the latest code from git and restart the bot.
+
+    Only works if the backend was deployed via git. On the Emergent platform
+    the update flow is handled by the platform itself.
+    """
+    if not user.is_admin:
+        raise HTTPException(403, "Admin uniquement")
+    repo_root = Path(__file__).resolve().parent.parent
+    if not (repo_root / ".git").exists():
+        return {"updated": False, "message": "Pas un dépôt git. Sur la plateforme Emergent, l'auto-update se fait via le bouton 'Save to GitHub' + pull manuel sur le VPS."}
+    try:
+        before = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
+        out = subprocess.check_output(["git", "pull", "--ff-only"], cwd=repo_root, text=True, stderr=subprocess.STDOUT)
+        after = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root, text=True).strip()
+        await audit_col.insert_one(AuditLog(level="SYSTEM", event="system_update",
+                                            details={"user": user.email, "before": before, "after": after}).model_dump())
+        return {"updated": before != after, "before": before, "after": after, "git_output": out}
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(500, f"git error: {e.output if hasattr(e, 'output') else str(e)}")
 
 
 # --- MT5 Real Connection ---

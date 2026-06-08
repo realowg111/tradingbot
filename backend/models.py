@@ -86,7 +86,14 @@ class BotConfig(BaseModel):
     symbols: List[str] = Field(default_factory=lambda: ["EURUSD", "GBPUSD", "XAUUSD", "US100", "BTCUSD"])
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
+    # Paper validation gates (now fully configurable - can be disabled entirely)
+    paper_validation_enabled: bool = True
     paper_validation_days: int = 7
+    paper_validation_min_trades: int = 10
+    paper_validation_min_winrate: float = 40.0
+    # Live MT5 trading toggle - when True AND mode=real AND mt5 connected,
+    # the bot places orders directly on MT5 (visible in your MT5 terminal live)
+    live_mt5_trading_enabled: bool = False
     real_validation_token: Optional[str] = None
     updated_at: datetime = Field(default_factory=utc_now)
 

@@ -1,48 +1,26 @@
-# Trading Bot — PRD (v2)
+# Trading Bot — PRD (v3)
 
-## Vision
-Console fintech mobile + backend FastAPI 24/7 pour bot de trading automatisé multi-marchés (Forex/CFD via MT5), avec live WebSocket, design pro et architecture MT5 pluggable.
+## Itération v3 (current)
+- **Bugfix critique** : `bot_runner._step()` re-fetchait l'état après mutations → daily_reset en boucle infinie. Fixed.
+- **Validation paper trading 100% configurable** : `paper_validation_enabled` (bool), `paper_validation_days`, `paper_validation_min_trades`, `paper_validation_min_winrate`. Désactivable complètement.
+- **Live MT5 trading toggle** : `live_mt5_trading_enabled`. Quand True + mode=real + MT5 connecté, le bot place les ordres directement via `mt5_connector.place_order()`. Les positions sont visibles en temps réel dans le terminal MT5 de l'utilisateur.
+- **MT5 trading methods** : `place_order(symbol, side, volume, sl, tp)` et `close_position(ticket)` ajoutés (natif Windows + bridge).
+- **Page Santé du serveur** : `/api/system/health` (CPU, RAM, disque, uptime, services MongoDB/bot/MT5/WS) + nouvelle screen `/system` avec gauges colorées.
+- **Auto-update endpoint** : `/api/system/update` fait git pull + audit log (admin only). Script Windows `auto_update.ps1` pour Scheduled Task quotidien + rollback automatique si health check fail.
+- **Sécurité** : credentials hardcodés retirés de l'écran login.
 
 ## Architecture
-- **Frontend** : Expo Router (mobile + web), JWT in expo-secure-store, **WebSocket live data** avec fallback polling
-- **Backend** : FastAPI + Motor (MongoDB async), JWT bcrypt, AES-256-GCM, **WS broadcast 1Hz**
-- **Bot Engine** : asyncio task loop (2s tick) — simulateur de marché interne + connector MT5 pluggable
-- **MT5 Real** : `services/mt5_broker.py` — utilise lib `MetaTrader5` (Windows) OU bridge HTTP (agent Windows + backend Linux). Auto-reconnexion 30s.
-- **Marchés simulés** : EURUSD, GBPUSD, XAUUSD, US100, BTCUSD
-- **VPS** : scripts d'installation Ubuntu/Debian + agent MT5 Windows dans `/app/scripts/`
-
-## Endpoints v2 ajoutés
-- `GET /api/mt5/status` — état connecteur + compte live
-- `POST /api/mt5/connect` — tentative connexion réelle MT5
-- `POST /api/mt5/disconnect` — déconnexion
-- `GET /api/mt5/live` — snapshot live (account + positions)
-- `WS /api/ws?token=JWT` — broadcast snapshot toutes les 1s : state + positions + prices + mt5_status
-
-## UI refonte
-- **Hero card sombre** (primary color) avec équity géante + bouton ON/OFF intégré (gros bouton power)
-- **Header sticky** avec 3 pills (mode démo/réel, bot actif/arrêté, MT5 connecté/simulé) + indicateur LIVE WS
-- **Sparkline équity** en miniature dans le hero
-- **Stat tiles** avec icônes colorées (P&L jour, winrate, trades)
-- **Positions card** avec barre verticale colorée (vert=BUY, rouge=SELL)
-- **Metrics grid** sur 2 lignes (winrate, profit factor, sharpe, drawdown, expectancy, W/L)
-- **Markets card** avec live dots
-- **Toast notifications** pour événements (bot ON/OFF, MT5 connect, kill switch, etc.)
-- **MT5 screen** redesigné : status card avec actions Connect/Disconnect + grid live (balance, equity, margin, profit) + guide bridge
-
-## Sécurité (préservée)
-- JWT signé HS256, expo-secure-store
-- bcrypt passwords + AES-256-GCM credentials MT5
-- WS auth via JWT en query param (à durcir avec header sur prod)
-- Mode trade-only, jamais de retraits
-- Kill Switch d'urgence + validation manuelle Demo→Réel
+- Frontend : Expo Router, JWT secure storage, WebSocket live + polling fallback
+- Backend : FastAPI + Motor MongoDB, JWT bcrypt, AES-256-GCM, asyncio bot loop
+- Trading : interne (simulator) OU MT5 natif Windows OU MT5 bridge (agent Windows)
+- VPS Linux : `/app/scripts/vps/install.sh`
+- VPS Windows tout-en-un : `/app/scripts/vps_windows/install.ps1` + `auto_update.ps1`
 
 ## Tests
-- **Backend** : 34/34 passing (27 regression + 7 nouveaux MT5/WS)
-- **Frontend** : DOM élements présents, lint OK, polling fallback fonctionnel
+- **34/34 passing** (regression + nouveaux)
 
-## Roadmap future
-- Splitter `server.py` (792 lignes) en routers (auth, bot, trades, mt5, ws)
-- Tests E2E Playwright pour l'UI mobile
-- Notifications push (Emergent-managed) sur événements bot critiques
-- IA d'optimisation génétique des paramètres
-- Smart business : Marketplace de stratégies (revenus récurrents)
+## Roadmap
+- Splitter `server.py` en routers
+- Notifications push (sur demande)
+- IA optimisation paramétrique
+- Marketplace stratégies

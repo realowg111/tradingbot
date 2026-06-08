@@ -158,7 +158,52 @@ class BotRunner:
         if quantity <= 0:
             return
 
-        # Execute (with slippage + fee)
+        # Determine if we route to MT5 live trading or simulator
+        live_mt5 = (
+            cfg.mode == "real"
+            and state.real_unlocked
+            and cfg.live_mt5_trading_enabled
+            and mt5_connector.connected
+        )
+
+        if live_mt5:
+            # Pull current MT5 price for accurate SL/TP
+            mt5_tick = await mt5_connector.get_price(symbol)
+            if mt5_tick:
+                ref_price = mt5_tick["ask"] if side == "BUY" else mt5_tick["bid"]
+            else:
+                ref_price = price
+            if side == "BUY":
+                sl = round(ref_price - sl_distance, 6)
+                tp = round(ref_price + (sl_distance * cfg.risk.risk_reward_ratio), 6)
+            else:
+                sl = round(ref_price + sl_distance, 6)
+                tp = round(ref_price - (sl_distance * cfg.risk.risk_reward_ratio), 6)
+            # Volume in lots (MT5) — convert quantity heuristically (cap to broker min)
+            volume_lots = max(0.01, round(quantity / 100000, 2))
+            result = await mt5_connector.place_order(symbol, side, volume_lots, sl, tp, comment=f"Bot {strategy}")
+            if not result.get("ok"):
+                await self._log("ERROR", "mt5_order_failed", {"symbol": symbol, "side": side, "error": result.get("error")})
+                return
+            entry = result.get("price", ref_price)
+            # Record locally as well for tracking parity
+            pos = Position(
+                symbol=symbol, side=side, entry_price=entry, quantity=volume_lots,
+                stop_loss=sl, take_profit=tp, strategy=strategy, reason=f"[MT5#{result.get('ticket')}] {reason}",
+                mode=cfg.mode,
+            )
+            doc = pos.model_dump()
+            doc["mt5_ticket"] = result.get("ticket")
+            await positions_col.insert_one(doc)
+            state.trades_today += 1
+            await self._log("TRADE", "mt5_open_position", {
+                "id": pos.id, "ticket": result.get("ticket"), "symbol": symbol, "side": side,
+                "entry": entry, "volume_lots": volume_lots, "sl": sl, "tp": tp,
+                "strategy": strategy, "reason": reason,
+            })
+            return
+
+        # ---- Simulator path (default) ----
         fill = market.execute_order(symbol, side, price)
         entry = fill["fill_price"]
         if side == "BUY":

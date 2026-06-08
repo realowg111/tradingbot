@@ -274,5 +274,87 @@ class MT5Connector:
             logger.warning("get_history_deals error: %s", e)
         return []
 
+    # ----- Trading: place / close orders on MT5 -----
+    async def place_order(self, symbol: str, side: str, volume: float, sl: float, tp: float, comment: str = "TradingBot") -> Dict[str, Any]:
+        """Place a market order on MT5. Returns {'ok': bool, 'ticket'?, 'price'?, 'error'?}"""
+        if not self.connected:
+            return {"ok": False, "error": "MT5 non connecte"}
+        try:
+            if self.mode == "native" and HAS_MT5_NATIVE:
+                def _send():
+                    info = mt5.symbol_info_tick(symbol)
+                    if info is None:
+                        return {"ok": False, "error": f"Pas de tick pour {symbol}"}
+                    price = info.ask if side == "BUY" else info.bid
+                    request = {
+                        "action": mt5.TRADE_ACTION_DEAL,
+                        "symbol": symbol,
+                        "volume": float(volume),
+                        "type": mt5.ORDER_TYPE_BUY if side == "BUY" else mt5.ORDER_TYPE_SELL,
+                        "price": price,
+                        "sl": float(sl),
+                        "tp": float(tp),
+                        "deviation": 20,
+                        "magic": 234000,
+                        "comment": comment,
+                        "type_time": mt5.ORDER_TIME_GTC,
+                        "type_filling": mt5.ORDER_FILLING_IOC,
+                    }
+                    result = mt5.order_send(request)
+                    if result is None:
+                        return {"ok": False, "error": str(mt5.last_error())}
+                    if result.retcode != mt5.TRADE_RETCODE_DONE:
+                        return {"ok": False, "error": f"retcode={result.retcode} comment={result.comment}"}
+                    return {"ok": True, "ticket": result.order, "price": result.price, "volume": result.volume}
+                return await asyncio.to_thread(_send)
+            if self.mode == "bridge":
+                r = await self._client.post(f"{self.bridge_url}/order", json={
+                    "symbol": symbol, "side": side, "volume": volume, "sl": sl, "tp": tp, "comment": comment,
+                })
+                return r.json() if r.status_code == 200 else {"ok": False, "error": r.text}
+        except Exception as e:
+            logger.exception("place_order error")
+            return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Mode connecteur inconnu"}
+
+    async def close_position(self, ticket: int) -> Dict[str, Any]:
+        """Close an open position by its MT5 ticket."""
+        if not self.connected:
+            return {"ok": False, "error": "MT5 non connecte"}
+        try:
+            if self.mode == "native" and HAS_MT5_NATIVE:
+                def _close():
+                    positions = mt5.positions_get(ticket=ticket)
+                    if not positions:
+                        return {"ok": False, "error": "Position introuvable"}
+                    p = positions[0]
+                    tick = mt5.symbol_info_tick(p.symbol)
+                    price = tick.bid if p.type == 0 else tick.ask
+                    request = {
+                        "action": mt5.TRADE_ACTION_DEAL,
+                        "symbol": p.symbol,
+                        "volume": p.volume,
+                        "type": mt5.ORDER_TYPE_SELL if p.type == 0 else mt5.ORDER_TYPE_BUY,
+                        "position": p.ticket,
+                        "price": price,
+                        "deviation": 20,
+                        "magic": 234000,
+                        "comment": "TradingBot Close",
+                        "type_time": mt5.ORDER_TIME_GTC,
+                        "type_filling": mt5.ORDER_FILLING_IOC,
+                    }
+                    result = mt5.order_send(request)
+                    if result is None or result.retcode != mt5.TRADE_RETCODE_DONE:
+                        return {"ok": False, "error": str(mt5.last_error()) if result is None else f"retcode={result.retcode}"}
+                    return {"ok": True, "price": result.price}
+                return await asyncio.to_thread(_close)
+            if self.mode == "bridge":
+                r = await self._client.post(f"{self.bridge_url}/close", json={"ticket": ticket})
+                return r.json() if r.status_code == 200 else {"ok": False, "error": r.text}
+        except Exception as e:
+            logger.exception("close_position error")
+            return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": "Mode connecteur inconnu"}
+
 
 mt5_connector = MT5Connector()
