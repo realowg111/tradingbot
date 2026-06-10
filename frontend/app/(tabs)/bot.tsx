@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Modal, TextInput } from "react-native";
+import React, { useState, useCallback } from "react";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect } from "expo-router";
@@ -10,17 +10,13 @@ import { apiGet, apiPost } from "@/src/api/client";
 
 export default function BotControl() {
   const [data, setData] = useState<any>(null);
-  const [config, setConfig] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showRealModal, setShowRealModal] = useState(false);
-  const [phrase, setPhrase] = useState("");
 
   const refresh = useCallback(async () => {
     try {
-      const [st, cfg] = await Promise.all([apiGet("/bot/state"), apiGet("/bot/config")]);
+      const st = await apiGet("/bot/state");
       setData(st);
-      setConfig(cfg);
     } catch (e: any) {
       setError(e.message);
     }
@@ -57,12 +53,11 @@ export default function BotControl() {
     catch (e: any) { setError(e.message); } finally { setBusy(false); }
   };
 
-  const confirmReal = async () => {
+  const switchToReal = async () => {
     setBusy(true); setError(null);
     try {
-      await apiPost("/bot/mode", { target_mode: "real", confirmation_phrase: phrase });
-      setShowRealModal(false);
-      setPhrase("");
+      // La phrase est envoyée automatiquement (compatibilité backend)
+      await apiPost("/bot/mode", { target_mode: "real", confirmation_phrase: "JE CONFIRME LE PASSAGE EN REEL" });
       await refresh();
     } catch (e: any) {
       setError(e.message);
@@ -103,12 +98,12 @@ export default function BotControl() {
             </View>
             <View style={{ flexDirection: "row", gap: 8 }}>
               <Button title="Démo" variant={mode === "demo" ? "primary" : "outline"} onPress={switchToDemo} testID="switch-demo-button" />
-              <Button title="Réel" variant={mode === "real" ? "primary" : "outline"} onPress={() => setShowRealModal(true)} testID="switch-real-button" />
+              <Button title="Réel" variant={mode === "real" ? "primary" : "outline"} onPress={switchToReal} loading={busy} testID="switch-real-button" />
             </View>
           </View>
           {mode === "demo" ? (
             <Text style={styles.modeHint} testID="mode-hint">
-              💡 Paper trading sans engagement financier. Validation min: {config?.paper_validation_days ?? 7} jours + 10 trades + winrate ≥ 40% pour activer le mode réel.
+              💡 Paper trading sans engagement financier. Touchez « Réel » pour basculer sur votre capital réel à tout moment.
             </Text>
           ) : (
             <Text style={styles.modeHint}>⚠️ Mode RÉEL — Capital réel exposé. Validation manuelle requise pour chaque changement.</Text>
@@ -201,42 +196,6 @@ export default function BotControl() {
 
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
-
-      {/* Modal validation passage réel */}
-      <Modal visible={showRealModal} animationType="slide" transparent onRequestClose={() => setShowRealModal(false)}>
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalBox}>
-            <View style={styles.modalHeader}>
-              <Ionicons name="alert-circle" size={24} color={colors.warning} />
-              <Text style={styles.modalTitle}>Validation Mode RÉEL</Text>
-            </View>
-            <Text style={styles.modalText}>
-              Passage en capital réel. Avant validation, le bot vérifiera :{"\n"}
-              • Min {config?.paper_validation_days ?? 7} jours de paper trading{"\n"}
-              • Min 10 trades démo{"\n"}
-              • Winrate ≥ 40%{"\n\n"}
-              Saisissez exactement la phrase ci-dessous :
-            </Text>
-            <View style={styles.phraseBox}>
-              <Text style={styles.phraseText} selectable>JE CONFIRME LE PASSAGE EN REEL</Text>
-            </View>
-            <TextInput
-              testID="real-confirm-input"
-              value={phrase}
-              onChangeText={setPhrase}
-              placeholder="Saisir la phrase…"
-              placeholderTextColor={colors.textMuted}
-              style={styles.modalInput}
-              autoCapitalize="characters"
-            />
-            <View style={{ flexDirection: "row", gap: 8, marginTop: spacing.md }}>
-              <Button title="Annuler" variant="outline" onPress={() => { setShowRealModal(false); setPhrase(""); setError(null); }} style={{ flex: 1 }} testID="real-cancel-button" />
-              <Button title="Confirmer RÉEL" variant="danger" onPress={confirmReal} loading={busy} style={{ flex: 1 }} testID="real-confirm-button" />
-            </View>
-            {error ? <Text style={{ color: colors.danger, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
-          </View>
-        </View>
-      </Modal>
     </SafeAreaView>
   );
 }

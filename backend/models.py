@@ -110,8 +110,8 @@ class BotConfig(BaseModel):
     symbols: List[str] = Field(default_factory=lambda: ["EURUSD", "GBPUSD", "XAUUSD", "US100", "BTCUSD"])
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
-    # Paper validation gates (now fully configurable - can be disabled entirely)
-    paper_validation_enabled: bool = True
+    # Paper validation gates (fully configurable - disabled by default)
+    paper_validation_enabled: bool = False
     paper_validation_days: int = 7
     paper_validation_min_trades: int = 10
     paper_validation_min_winrate: float = 40.0

@@ -1,6 +1,13 @@
 # Trading Bot — PRD (v6)
 
-## Itération v6 (current) — Déblocage login + reconnexion VPS + fix IPC timeout
+## Itération v6 (current) — Déblocage login + reconnexion VPS + fix IPC timeout + suppression verrous mode réel
+- **Suppression des verrous de passage en réel** (demande utilisateur explicite) :
+  - VPS : `paper_validation_enabled=false` appliqué à distance via POST /api/bot/config-flags.
+  - `server.py` : check de la phrase "JE CONFIRME LE PASSAGE EN REEL" supprimé (la phrase reste acceptée/ignorée).
+  - `models.py` : `paper_validation_enabled` default → False.
+  - `bot.tsx` : modal + saisie de phrase supprimés ; bouton "Réel" bascule en 1 tap (la phrase est envoyée automatiquement en arrière-plan pour compatibilité avec le backend VPS non mis à jour) ; hint texte mis à jour.
+  - Testé e2e sur le VPS : passage en RÉEL en 1 clic, badge "RÉEL DÉBLOQUÉ" ✅.
+- **État VPS après bascule** : mode=real, real_unlocked=true, bot DÉSACTIVÉ (sécurité post-switch), `live_mt5_trading_enabled=false` → pour trader réellement sur MT5 : activer le toggle dans l'écran Risque + bouton ON.
 - **Réinitialisation mot de passe admin VPS** : script infaillible `scripts/vps_windows/reset_password.ps1` (Python encodé Base64). Credentials : `admin@trading.bot` / `Trading2025!` (VPS + sandbox).
 - **Fix critique 1** : le fork avait réinitialisé `EXPO_PUBLIC_BACKEND_URL` sur le backend sandbox Linux → cause du "identifiants invalides" ET du bandeau "backend Linux". Restauré vers le tunnel : `https://cult-spa-projectors-exceptional.trycloudflare.com`.
 - **Fix critique 2 — IPC timeout (-10005)** : le chemin terminal sauvegardé avait été perdu (POST /mt5/credentials écrasait le path) et l'autodétection choisissait le MAUVAIS terminal (`C:\Program Files\MetaTrader 5` au lieu de `C:\Program Files\RoboForex MT5 Terminal`). Réparé à distance via API (credentials corrigés + connect) → **MT5 CONNECTÉ en natif (compte 68323992, RoboForex-Pro, 500 USD, levier 1:1000)**.

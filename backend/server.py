@@ -259,9 +259,6 @@ async def switch_mode(req: ModeSwitchRequest, user: UserPublic = Depends(get_cur
     state = await _get_state()
 
     if req.target_mode == "real":
-        # Require confirmation phrase
-        if req.confirmation_phrase != "JE CONFIRME LE PASSAGE EN REEL":
-            raise HTTPException(400, "Phrase de confirmation requise: 'JE CONFIRME LE PASSAGE EN REEL'")
         # Configurable paper validation gates (can be fully disabled)
         if cfg.paper_validation_enabled:
             ps = state.paper_start
