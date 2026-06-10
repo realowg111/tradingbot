@@ -47,6 +47,7 @@ from services.strategies import STRATEGIES
 from services.metrics import compute_metrics
 from services.mt5_broker import mt5_connector
 from services.ws_hub import ws_hub
+from services import ai_journal
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("main")
@@ -902,6 +903,99 @@ async def _ws_broadcast_loop():
 @app.on_event("startup")
 async def start_broadcast():
     asyncio.create_task(_ws_broadcast_loop())
+
+
+# --- AI Journal ---
+@api.get("/journal/preview")
+async def journal_preview(
+    days: int = 30,
+    mode: Optional[str] = None,
+    user: UserPublic = Depends(get_current_user),
+):
+    """Return aggregated stats for the chosen period (no LLM call)."""
+    days = max(1, min(days, 365))
+    if mode not in (None, "demo", "real"):
+        mode = None
+    return await ai_journal.get_stats_preview(days, mode)
+
+
+@api.post("/journal/analyze")
+async def journal_analyze(
+    payload: dict,
+    user: UserPublic = Depends(get_current_user),
+):
+    """Stream a Claude Sonnet 4.5 analysis of the trade history as SSE.
+
+    Body: {"days": int, "mode": "demo"|"real"|null}
+    """
+    from fastapi.responses import StreamingResponse
+
+    days = int(payload.get("days", 30))
+    days = max(1, min(days, 365))
+    mode = payload.get("mode")
+    if mode not in (None, "demo", "real"):
+        mode = None
+
+    async def event_generator():
+        try:
+            async for chunk in ai_journal.stream_analysis(days, mode, user.id):
+                # SSE format with json-escaped content to preserve newlines
+                yield f"data: {json.dumps({'delta': chunk})}\n\n"
+            yield "data: {\"done\": true}\n\n"
+        except Exception as e:
+            logger.exception("journal/analyze error: %s", e)
+            yield f"data: {json.dumps({'error': str(e)[:300]})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@api.get("/journal/reports")
+async def journal_reports(
+    limit: int = 20,
+    user: UserPublic = Depends(get_current_user),
+):
+    limit = max(1, min(limit, 100))
+    return await ai_journal.list_reports(limit=limit)
+
+
+@api.get("/journal/reports/{report_id}")
+async def journal_report_get(
+    report_id: str,
+    user: UserPublic = Depends(get_current_user),
+):
+    rep = await ai_journal.get_report(report_id)
+    if not rep:
+        raise HTTPException(404, "Rapport introuvable")
+    return rep
+
+
+@api.delete("/journal/reports/{report_id}")
+async def journal_report_delete(
+    report_id: str,
+    user: UserPublic = Depends(get_current_user),
+):
+    if not user.is_admin:
+        raise HTTPException(403, "Admin requis")
+    ok = await ai_journal.delete_report(report_id)
+    if not ok:
+        raise HTTPException(404, "Rapport introuvable")
+    return {"deleted": True}
+
+
+@app.on_event("startup")
+async def _init_journal_indexes():
+    try:
+        await ai_journal.ensure_indexes()
+    except Exception:
+        logger.exception("journal indexes init failed")
 
 
 # --- Mount router ---

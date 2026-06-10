@@ -1,26 +1,29 @@
-# Trading Bot — PRD (v3)
+# Trading Bot — PRD (v4)
 
-## Itération v3 (current)
-- **Bugfix critique** : `bot_runner._step()` re-fetchait l'état après mutations → daily_reset en boucle infinie. Fixed.
-- **Validation paper trading 100% configurable** : `paper_validation_enabled` (bool), `paper_validation_days`, `paper_validation_min_trades`, `paper_validation_min_winrate`. Désactivable complètement.
-- **Live MT5 trading toggle** : `live_mt5_trading_enabled`. Quand True + mode=real + MT5 connecté, le bot place les ordres directement via `mt5_connector.place_order()`. Les positions sont visibles en temps réel dans le terminal MT5 de l'utilisateur.
-- **MT5 trading methods** : `place_order(symbol, side, volume, sl, tp)` et `close_position(ticket)` ajoutés (natif Windows + bridge).
-- **Page Santé du serveur** : `/api/system/health` (CPU, RAM, disque, uptime, services MongoDB/bot/MT5/WS) + nouvelle screen `/system` avec gauges colorées.
-- **Auto-update endpoint** : `/api/system/update` fait git pull + audit log (admin only). Script Windows `auto_update.ps1` pour Scheduled Task quotidien + rollback automatique si health check fail.
-- **Sécurité** : credentials hardcodés retirés de l'écran login.
+## Itération v4 (current)
+- **Cloudflare Tunnel pour VPS** : Script PowerShell `setup_cloudflare_tunnel.ps1` qui installe `cloudflared.exe` comme service Windows (`TradingBotTunnel`) et expose le backend (port 8001) sur une URL HTTPS publique `*.trycloudflare.com`. Résout définitivement le Mixed Content entre frontend HTTPS et VPS HTTP.
+- **Journal AI (Claude Sonnet 4.5)** : Nouvelle feature `/journal` avec analyse intelligente de l'historique de trades.
+  - Backend : `services/ai_journal.py` agrège stats (winrate, PF, expectancy, by_symbol, by_strategy) et stream Claude Sonnet 4.5 via Emergent LLM Key + emergentintegrations.
+  - API : `GET /api/journal/preview` (stats), `POST /api/journal/analyze` (SSE streaming), `GET /api/journal/reports`, `GET /api/journal/reports/{id}`, `DELETE` (admin).
+  - Frontend : écran `/app/journal.tsx` avec sélecteurs période (7j/30j/90j) + mode (Tous/Démo/Réel), aperçu stats en grille, génération IA avec streaming SSE token-par-token, renderer Markdown minimal, historique des rapports cliquables, bouton "Arrêter".
+  - Rapport structuré : Synthèse globale → Forces → Faiblesses → Analyse par stratégie/symbole → Recommandations chiffrées → Verdict.
+
+## Itération v3
+- Bugfix `bot_runner._step()` daily_reset boucle infinie. Fixed.
+- Validation paper trading 100% configurable.
+- Live MT5 trading toggle.
+- Page Santé du serveur.
+- Auto-update endpoint + script Windows.
 
 ## Architecture
 - Frontend : Expo Router, JWT secure storage, WebSocket live + polling fallback
 - Backend : FastAPI + Motor MongoDB, JWT bcrypt, AES-256-GCM, asyncio bot loop
-- Trading : interne (simulator) OU MT5 natif Windows OU MT5 bridge (agent Windows)
-- VPS Linux : `/app/scripts/vps/install.sh`
-- VPS Windows tout-en-un : `/app/scripts/vps_windows/install.ps1` + `auto_update.ps1`
-
-## Tests
-- **34/34 passing** (regression + nouveaux)
+- Trading : interne (simulator) OU MT5 natif Windows OU MT5 bridge
+- IA : Claude Sonnet 4.5 via Emergent LLM Key (streaming SSE)
+- VPS Windows : `install.ps1` + `auto_update.ps1` + `setup_cloudflare_tunnel.ps1`
 
 ## Roadmap
 - Splitter `server.py` en routers
 - Notifications push (sur demande)
-- IA optimisation paramétrique
+- Tunnel Cloudflare nommé (URL fixe) avec compte CF + domaine
 - Marketplace stratégies
