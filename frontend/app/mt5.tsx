@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from "react-native";
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
+import * as Clipboard from "expo-clipboard";
 
 import { Card, Button, Input, SectionTitle, Overline, Badge } from "@/src/components/ui";
 import { colors, spacing, fmt, radius } from "@/src/theme";
@@ -227,17 +228,62 @@ export default function MT5Screen() {
           <Input label="Mot de passe (chiffré AES-256)" value={password} onChangeText={setPassword} placeholder="••••••••" secureTextEntry testID="mt5-password-input" />
           <Input label="Serveur" value={server} onChangeText={setServer} placeholder="ICMarketsSC-Demo" autoCapitalize="none" testID="mt5-server-input" />
           <Input label="Broker (optionnel)" value={broker} onChangeText={setBroker} placeholder="RoboForex" testID="mt5-broker-input" />
-          <Input
-            label="Chemin terminal64.exe (optionnel, recommandé sur VPS)"
-            value={path}
-            onChangeText={setPath}
-            placeholder="C:\Program Files\RoboForex - MetaTrader 5\terminal64.exe"
-            autoCapitalize="none"
-            testID="mt5-path-input"
-          />
+
+          {/* Path field — dedicated TextInput with paste button (handles long backslash paths) */}
+          <View style={{ marginBottom: 16 }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+              <Text style={styles.pathLabel}>{"Chemin terminal64.exe (recommandé sur VPS)"}</Text>
+              <TouchableOpacity
+                onPress={async () => {
+                  try {
+                    const txt = await Clipboard.getStringAsync();
+                    if (txt) {
+                      // Strip wrapping quotes that Windows "Copy as path" adds
+                      const cleaned = txt.replace(/^["']|["']$/g, "").trim();
+                      setPath(cleaned);
+                      toast.show({ type: "success", title: "Chemin collé", message: cleaned.length > 40 ? cleaned.slice(0, 40) + "…" : cleaned });
+                    } else {
+                      toast.show({ type: "warning", title: "Presse-papiers vide" });
+                    }
+                  } catch {
+                    toast.show({ type: "danger", title: "Impossible de coller", message: "Permission refusée" });
+                  }
+                }}
+                style={styles.pasteBtn}
+                testID="mt5-path-paste"
+              >
+                <Ionicons name="clipboard-outline" size={14} color={colors.primary} />
+                <Text style={styles.pasteBtnText}>Coller</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.pathInputWrap}>
+              <TextInput
+                value={path}
+                onChangeText={setPath}
+                placeholder="C:\Program Files\RoboForex - MetaTrader 5\terminal64.exe"
+                placeholderTextColor={colors.textMuted}
+                style={styles.pathInput}
+                autoCapitalize="none"
+                autoCorrect={false}
+                spellCheck={false}
+                autoComplete="off"
+                multiline={false}
+                testID="mt5-path-input"
+                {...({ dataDetectorTypes: "none" } as any)}
+              />
+              {path ? (
+                <TouchableOpacity onPress={() => setPath("")} style={styles.clearBtn} testID="mt5-path-clear">
+                  <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <Text style={styles.pathHint}>
+              {"Astuce : sur le VPS, clic droit sur l'icône MT5 → Copier comme chemin d'accès → cliquez 'Coller' ci-dessus."}
+            </Text>
+          </View>
           {mt5Status?.autodetected_path && !path ? (
             <Text style={{ fontSize: 11, color: colors.success, marginTop: -8, marginBottom: 12 }}>
-              ✓ Détecté automatiquement : {mt5Status.autodetected_path}
+              {"✓ Détecté automatiquement : "}{mt5Status.autodetected_path}
             </Text>
           ) : null}
           {error ? <Text style={{ color: colors.danger, fontSize: 13, marginBottom: 8 }}>{error}</Text> : null}
@@ -287,4 +333,27 @@ const styles = StyleSheet.create({
   existingLabel: { fontSize: 10, color: colors.textSecondary, fontWeight: "700", textTransform: "uppercase", letterSpacing: 1 },
   existingLogin: { fontSize: 14, color: colors.textPrimary, fontWeight: "700", marginTop: 2 },
   existingServer: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
+
+  pathLabel: { fontSize: 12, fontWeight: "600", color: colors.textSecondary, textTransform: "uppercase", letterSpacing: 1, flex: 1 },
+  pasteBtn: {
+    flexDirection: "row", alignItems: "center", gap: 4,
+    paddingHorizontal: 10, paddingVertical: 4,
+    backgroundColor: "#EEF2FF", borderRadius: radius.sm,
+    borderWidth: 1, borderColor: "#C7D2FE",
+  },
+  pasteBtnText: { fontSize: 11, fontWeight: "700", color: colors.primary, letterSpacing: 0.3 },
+  pathInputWrap: {
+    flexDirection: "row", alignItems: "center",
+    backgroundColor: colors.white,
+    borderColor: colors.borderStrong, borderWidth: 1,
+    borderRadius: radius.md, paddingHorizontal: 14,
+    minHeight: 48,
+  },
+  pathInput: {
+    flex: 1, paddingVertical: 12,
+    fontSize: 13, color: colors.textPrimary,
+    fontFamily: "monospace",
+  },
+  clearBtn: { padding: 6 },
+  pathHint: { fontSize: 11, color: colors.textMuted, marginTop: 6, fontStyle: "italic" },
 });
