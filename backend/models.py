@@ -1,7 +1,7 @@
 """Pydantic models for requests/responses."""
 from datetime import datetime, timezone
 from typing import Optional, Dict, List, Literal
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 import uuid
 
 
@@ -37,12 +37,25 @@ class Token(BaseModel):
 
 
 # ---------- MT5 ----------
+def _clean_str(v):
+    """Strip whitespace + wrapping quotes; empty string -> None."""
+    if isinstance(v, str):
+        v = v.strip().strip('"').strip("'").strip()
+        return v or None
+    return v
+
+
 class MT5CredentialsIn(BaseModel):
     login: str
     password: Optional[str] = None  # Optional: if empty, existing password is kept
     server: str
     broker: Optional[str] = None
     path: Optional[str] = None  # Optional explicit path to terminal64.exe
+
+    @field_validator("login", "server", "broker", "path", mode="before")
+    @classmethod
+    def clean(cls, v):
+        return _clean_str(v)
 
 
 class MT5CredentialsOut(BaseModel):
@@ -55,6 +68,11 @@ class MT5CredentialsOut(BaseModel):
 
 class MT5PathPatch(BaseModel):
     path: str
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def clean(cls, v):
+        return _clean_str(v) or ""
 
 
 # ---------- Bot config & state ----------

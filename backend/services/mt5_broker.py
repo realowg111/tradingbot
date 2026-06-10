@@ -163,6 +163,14 @@ class MT5Connector:
             return base
         if code == -10004 or "auth" in str(msg).lower():
             return "Authentification refusée. Vérifie le numéro de compte, le mot de passe et le nom du serveur."
+        if code == -10005 or "ipc timeout" in str(msg).lower():
+            return (
+                "IPC timeout : la lib Python n'arrive pas à communiquer avec le terminal MT5. "
+                f"Chemin utilisé : {path or '(autodétecté)'}. Vérifie que : "
+                "1) le chemin pointe vers TON terminal (ex: RoboForex), pas un autre MT5 installé ; "
+                "2) le terminal MT5 est ouvert dans ta session Windows ; "
+                "3) le backend tourne dans la session interactive (Tâche planifiée, pas un Service)."
+            )
         return f"MT5 initialize failed: code={code} msg={msg}"
 
     async def _connect_bridge(self, login: str, password: str, server: str) -> Dict[str, Any]:
@@ -229,7 +237,7 @@ class MT5Connector:
                     if info is None:
                         logger.warning("MT5 terminal not responding, attempting reconnect...")
                         if self._password and self.account_login and self.server:
-                            await self._connect_native(self.account_login, self._password, self.server)
+                            await self._connect_native(self.account_login, self._password, self.server, self.terminal_path)
                     else:
                         self.last_heartbeat = datetime.now(timezone.utc)
                 elif self.mode == "bridge":

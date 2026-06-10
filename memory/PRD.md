@@ -1,9 +1,17 @@
 # Trading Bot — PRD (v6)
 
-## Itération v6 (current) — Déblocage login + reconnexion VPS
-- **Réinitialisation mot de passe admin VPS** : script infaillible `scripts/vps_windows/reset_password.ps1` (Python encodé Base64 → écrit `C:\trading-bot\reset_pw.py` et l'exécute avec le venv). Credentials : `admin@trading.bot` / `Trading2025!` (VPS + sandbox).
-- **Fix critique** : le fork avait réinitialisé `EXPO_PUBLIC_BACKEND_URL` sur le backend sandbox Linux → c'était la cause du "identifiants invalides" ET du bandeau "backend Linux" sur la page MT5. Restauré vers le tunnel Cloudflare du VPS : `https://cult-spa-projectors-exceptional.trycloudflare.com`. Vérifié e2e (login + page MT5 OK, `has_native_lib: true`).
-- ⚠️ Le tunnel est un "quick tunnel" (URL éphémère) : si le VPS/cloudflared redémarre, l'URL change → il faudra mettre à jour `EXPO_PUBLIC_BACKEND_URL`. Roadmap : tunnel nommé (URL fixe).
+## Itération v6 (current) — Déblocage login + reconnexion VPS + fix IPC timeout
+- **Réinitialisation mot de passe admin VPS** : script infaillible `scripts/vps_windows/reset_password.ps1` (Python encodé Base64). Credentials : `admin@trading.bot` / `Trading2025!` (VPS + sandbox).
+- **Fix critique 1** : le fork avait réinitialisé `EXPO_PUBLIC_BACKEND_URL` sur le backend sandbox Linux → cause du "identifiants invalides" ET du bandeau "backend Linux". Restauré vers le tunnel : `https://cult-spa-projectors-exceptional.trycloudflare.com`.
+- **Fix critique 2 — IPC timeout (-10005)** : le chemin terminal sauvegardé avait été perdu (POST /mt5/credentials écrasait le path) et l'autodétection choisissait le MAUVAIS terminal (`C:\Program Files\MetaTrader 5` au lieu de `C:\Program Files\RoboForex MT5 Terminal`). Réparé à distance via API (credentials corrigés + connect) → **MT5 CONNECTÉ en natif (compte 68323992, RoboForex-Pro, 500 USD, levier 1:1000)**.
+- **Correctifs code (anti-récurrence, testés)** :
+  - `models.py` : validators trim espaces/guillemets sur login/server/broker/path (MT5CredentialsIn + MT5PathPatch).
+  - `server.py` : POST /mt5/credentials préserve désormais le path existant si non fourni (comme le password).
+  - `mt5_broker.py` : message FR actionnable pour l'erreur -10005 IPC timeout ; la boucle de reconnexion réutilise le terminal_path.
+  - `mt5.tsx` : le polling 3s n'écrase plus les champs du formulaire (préremplissage unique) ; trim des champs avant envoi.
+- ⚠️ Le VPS tourne encore l'ANCIEN code (fonctionne car la DB est corrigée). Les correctifs s'appliqueront au prochain update VPS (Save to GitHub + git pull). Note : `auto_update.ps1` utilise encore `Restart-Service TradingBotBackend` — obsolète depuis la migration en Tâche planifiée, à mettre à jour.
+- ⚠️ Tunnel "quick" éphémère : si cloudflared redémarre, l'URL change → mettre à jour `EXPO_PUBLIC_BACKEND_URL`.
+- État bot VPS : actif, mode DEMO/paper (10 000 USD virtuel), `real_unlocked: false`. Prochaine étape : passage en live / micro-trade test.
 
 ## Itération v5
 - **Détection dynamique du régime de marché** + **adaptation automatique** : nouveau module `services/market_regime.py`.

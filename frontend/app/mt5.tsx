@@ -1,11 +1,11 @@
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useState, useCallback } from "react";
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect } from "expo-router";
 import * as Clipboard from "expo-clipboard";
 
-import { Card, Button, Input, SectionTitle, Overline, Badge } from "@/src/components/ui";
+import { Card, Button, Input, SectionTitle, Overline } from "@/src/components/ui";
 import { colors, spacing, fmt, radius } from "@/src/theme";
 import { apiGet, apiPost, apiPatch } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
@@ -24,6 +24,7 @@ export default function MT5Screen() {
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const formPrefilled = React.useRef(false);
 
   const refreshAll = useCallback(async () => {
     try {
@@ -33,10 +34,14 @@ export default function MT5Screen() {
       ]);
       if (creds) {
         setExisting(creds);
-        setLogin(creds.login);
-        setServer(creds.server);
-        setBroker(creds.broker || "");
-        setPath(creds.path || "");
+        // Prefill form ONCE only — never overwrite while the user is typing
+        if (!formPrefilled.current) {
+          formPrefilled.current = true;
+          setLogin(creds.login);
+          setServer(creds.server);
+          setBroker(creds.broker || "");
+          setPath(creds.path || "");
+        }
       }
       if (st) {
         setMt5Status(st.status);
@@ -58,7 +63,13 @@ export default function MT5Screen() {
     if (!existing && !password) { setError("Mot de passe requis pour la première sauvegarde"); return; }
     setBusy(true);
     try {
-      await apiPost("/mt5/credentials", { login, password: password || null, server, broker, path: path || null });
+      await apiPost("/mt5/credentials", {
+        login: login.trim(),
+        password: password || null,
+        server: server.trim(),
+        broker: broker.trim() || null,
+        path: path.trim() || null,
+      });
       toast.show({ type: "success", title: "Identifiants chiffrés", message: "AES-256 sauvegardés en sécurité" });
       setPassword("");
       await refreshAll();
