@@ -48,6 +48,7 @@ from services.metrics import compute_metrics
 from services.mt5_broker import mt5_connector
 from services.ws_hub import ws_hub
 from services import ai_journal
+from services.market_regime import regime_store, detect_regime
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("main")
@@ -903,6 +904,53 @@ async def _ws_broadcast_loop():
 @app.on_event("startup")
 async def start_broadcast():
     asyncio.create_task(_ws_broadcast_loop())
+
+
+# --- Market regime / Adaptive strategy ---
+@api.get("/market/regime")
+async def market_regime(user: UserPublic = Depends(get_current_user)):
+    """Return latest detected regime per symbol (refreshed each bot tick).
+
+    Falls back to live recomputation from the simulator if cache is empty.
+    """
+    snap = regime_store.all()
+    if not snap:
+        # Cold start fallback: compute on the fly using the simulator
+        cfg = await _get_config()
+        snap = {}
+        for sym in cfg.symbols:
+            closes = market.get_closes(sym, 200)
+            if len(closes) >= 30:
+                info = detect_regime(closes)
+                regime_store.update(sym, info)
+                snap[sym] = {
+                    **info,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }
+    # Also include the current adaptive toggle for the UI
+    cfg = await _get_config()
+    return {
+        "adaptive_enabled": cfg.adaptive_enabled,
+        "symbols": snap,
+    }
+
+
+class AdaptiveToggle(BaseModel):
+    enabled: bool
+
+
+@api.post("/bot/adaptive")
+async def toggle_adaptive(payload: AdaptiveToggle, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    cfg.adaptive_enabled = bool(payload.enabled)
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(
+        level="SYSTEM",
+        event="adaptive_toggle",
+        details={"user": user.email, "enabled": cfg.adaptive_enabled},
+    ).model_dump())
+    return {"adaptive_enabled": cfg.adaptive_enabled}
 
 
 # --- AI Journal ---

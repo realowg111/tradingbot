@@ -12,6 +12,7 @@ type Item = { id: string; icon: keyof typeof Ionicons.glyphMap; label: string; d
 
 const items: Item[] = [
   { id: "journal", icon: "sparkles-outline", label: "Journal AI", description: "Analyse IA Claude 4.5 de l'historique de trades", href: "/journal", testId: "more-journal" },
+  { id: "regime", icon: "pulse-outline", label: "Régime de marché", description: "Détection adaptative trend/range/volatile + ajustement auto", href: "/regime", testId: "more-regime" },
   { id: "risk", icon: "shield-checkmark-outline", label: "Gestion du risque", description: "SL, TP, drawdown, sizing, ratio R/R, validation, live MT5", href: "/risk", testId: "more-risk" },
   { id: "system", icon: "pulse-outline", label: "Santé du serveur", description: "CPU, RAM, disque, services, mise à jour auto", href: "/system", testId: "more-system" },
   { id: "costs", icon: "cash-outline", label: "Coûts infrastructure", description: "VPS, API, données, maintenance", href: "/costs", testId: "more-costs" },

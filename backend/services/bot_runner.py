@@ -14,6 +14,13 @@ from database import (
 from models import BotConfig, BotState, Position, Trade, AuditLog, utc_now
 from services.paper_engine import market, SYMBOL_SPECS
 from services.strategies import STRATEGIES, detect_volatility
+from services.mt5_broker import mt5_connector
+from services.market_regime import (
+    detect_regime,
+    filter_strategies,
+    risk_multiplier,
+    regime_store,
+)
 
 logger = logging.getLogger("bot_runner")
 
@@ -104,16 +111,24 @@ class BotRunner:
             if len(closes) < 30:
                 continue
 
-            # Volatility filter
+            # Detect regime + cache for UI (always, even if adaptive disabled)
+            regime_info = detect_regime(closes)
+            regime_store.update(symbol, regime_info)
+            regime_label = regime_info.get("regime", "UNKNOWN")
+
+            # Volatility filter (legacy hard pause)
             vol = detect_volatility(closes)
-            spec = SYMBOL_SPECS.get(symbol, {})
             # Pause on extreme volatility (relative > 0.05 = 5%)
             if cfg.risk.volatility_pause and vol > 0.05:
                 await self._log("RISK", "volatility_pause", {"symbol": symbol, "vol": vol})
                 continue
 
-            # Aggregate signals from enabled strategies
+            # Adaptive strategy filtering
             enabled = cfg.strategy.enabled or ["multi"]
+            if cfg.adaptive_enabled:
+                enabled = filter_strategies(regime_label, enabled)
+
+            # Aggregate signals from enabled strategies
             signals = []
             for strat_id in enabled:
                 strat = STRATEGIES.get(strat_id)
@@ -137,19 +152,25 @@ class BotRunner:
             chosen = [(sid, r) for sid, s, r in signals if s == side]
             strat_used = ",".join(sid for sid, _ in chosen)
             reason = " | ".join(r for _, r in chosen)
+            # Annotate reason with regime
+            if cfg.adaptive_enabled:
+                reason = f"[{regime_label}] {reason}"
+
+            # Adaptive risk multiplier (scales position size)
+            adaptive_mult = risk_multiplier(regime_label) if cfg.adaptive_enabled else 1.0
 
             # Open position (mutates state in-place: balance fee, trades_today)
-            await self._open_position(cfg, state, symbol, side, strat_used, reason)
+            await self._open_position(cfg, state, symbol, side, strat_used, reason, adaptive_mult)
 
         await self._update_state(state)
 
-    async def _open_position(self, cfg: BotConfig, state: BotState, symbol: str, side: str, strategy: str, reason: str):
+    async def _open_position(self, cfg: BotConfig, state: BotState, symbol: str, side: str, strategy: str, reason: str, risk_mult: float = 1.0):
         price = market.get_price(symbol)
         if price is None:
             return
         # Position sizing: risk_per_trade_pct of allocated capital
         allocated = state.balance * (cfg.risk.capital_allocation_pct / 100.0)
-        risk_amount = allocated * (cfg.risk.risk_per_trade_pct / 100.0)
+        risk_amount = allocated * (cfg.risk.risk_per_trade_pct / 100.0) * float(risk_mult)
         # Stop loss distance as % of price
         sl_distance = price * (cfg.risk.stop_loss_pct / 100.0)
         if sl_distance <= 0:
@@ -296,7 +317,6 @@ class BotRunner:
         state.open_positions = await positions_col.count_documents({"status": "OPEN"})
 
     async def force_close_all(self, reason: str = "kill_switch"):
-        cfg = await self._get_config()
         state = await self._get_state()
         cursor = positions_col.find({"status": "OPEN"}, {"_id": 0})
         async for p in cursor:

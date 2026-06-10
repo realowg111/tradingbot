@@ -94,6 +94,9 @@ class BotConfig(BaseModel):
     # Live MT5 trading toggle - when True AND mode=real AND mt5 connected,
     # the bot places orders directly on MT5 (visible in your MT5 terminal live)
     live_mt5_trading_enabled: bool = False
+    # Adaptive strategy: when True, detect market regime per symbol and
+    # restrict active strategies + scale risk accordingly.
+    adaptive_enabled: bool = True
     real_validation_token: Optional[str] = None
     updated_at: datetime = Field(default_factory=utc_now)
 
