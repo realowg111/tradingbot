@@ -30,7 +30,7 @@ from database import (
 )
 from models import (
     UserRegister, UserLogin, UserPublic, Token,
-    MT5CredentialsIn, MT5CredentialsOut,
+    MT5CredentialsIn, MT5CredentialsOut, MT5PathPatch,
     BotConfig, BotState, RiskConfig, StrategyConfig,
     CostItem, CostItemCreate, AuditLog,
     ModeSwitchRequest, BacktestRequest, BacktestResult, Trade,
@@ -138,8 +138,18 @@ async def me(user: UserPublic = Depends(get_current_user)):
 # --- MT5 credentials (encrypted) ---
 @api.post("/mt5/credentials", response_model=MT5CredentialsOut)
 async def save_mt5(creds: MT5CredentialsIn, user: UserPublic = Depends(get_current_user)):
+    # If password missing, keep existing one (merge with stored credentials)
+    password = creds.password
+    if not password:
+        doc = await users_col.find_one({"id": user.id}, {"_id": 0, "mt5_credentials": 1})
+        if doc and "mt5_credentials" in doc:
+            existing = json.loads(decrypt_str(doc["mt5_credentials"]))
+            password = existing.get("password")
+        if not password:
+            raise HTTPException(400, "Mot de passe requis pour la première sauvegarde")
+
     encrypted = encrypt_str(json.dumps({
-        "login": creds.login, "password": creds.password,
+        "login": creds.login, "password": password,
         "server": creds.server, "broker": creds.broker,
         "path": creds.path,
     }))
@@ -147,6 +157,25 @@ async def save_mt5(creds: MT5CredentialsIn, user: UserPublic = Depends(get_curre
     await audit_col.insert_one(AuditLog(level="SYSTEM", event="mt5_credentials_updated",
                                         details={"user": user.email, "login": creds.login, "server": creds.server}).model_dump())
     return MT5CredentialsOut(login=creds.login, server=creds.server, broker=creds.broker, path=creds.path, saved=True)
+
+
+@api.patch("/mt5/credentials/path", response_model=MT5CredentialsOut)
+async def patch_mt5_path(payload: MT5PathPatch, user: UserPublic = Depends(get_current_user)):
+    """Update ONLY the terminal path while keeping login/password/server unchanged.
+
+    Convenient when the user discovered the right path and doesn't want to re-enter
+    the broker password.
+    """
+    doc = await users_col.find_one({"id": user.id}, {"_id": 0, "mt5_credentials": 1})
+    if not doc or "mt5_credentials" not in doc:
+        raise HTTPException(404, "Aucun identifiant MT5 existant. Enregistrez d'abord login/password/serveur.")
+    data = json.loads(decrypt_str(doc["mt5_credentials"]))
+    data["path"] = payload.path
+    encrypted = encrypt_str(json.dumps(data))
+    await users_col.update_one({"id": user.id}, {"$set": {"mt5_credentials": encrypted}})
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="mt5_path_updated",
+                                        details={"user": user.email, "path": payload.path}).model_dump())
+    return MT5CredentialsOut(login=data["login"], server=data["server"], broker=data.get("broker"), path=payload.path, saved=True)
 
 
 @api.get("/mt5/credentials", response_model=Optional[MT5CredentialsOut])

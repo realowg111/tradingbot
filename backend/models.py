@@ -39,7 +39,7 @@ class Token(BaseModel):
 # ---------- MT5 ----------
 class MT5CredentialsIn(BaseModel):
     login: str
-    password: str
+    password: Optional[str] = None  # Optional: if empty, existing password is kept
     server: str
     broker: Optional[str] = None
     path: Optional[str] = None  # Optional explicit path to terminal64.exe
@@ -51,6 +51,10 @@ class MT5CredentialsOut(BaseModel):
     broker: Optional[str] = None
     path: Optional[str] = None
     saved: bool = True
+
+
+class MT5PathPatch(BaseModel):
+    path: str
 
 
 # ---------- Bot config & state ----------

@@ -69,6 +69,25 @@ export async function apiDelete<T = any>(path: string): Promise<T> {
   return res.json();
 }
 
+export async function apiPatch<T = any>(path: string, body?: any): Promise<T> {
+  const headers = { "Content-Type": "application/json", ...(await authHeader()) };
+  const res = await fetch(`${BASE}/api${path}`, {
+    method: "PATCH",
+    headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    try {
+      const parsed = JSON.parse(txt);
+      throw new Error(parsed.detail || txt);
+    } catch {
+      throw new Error(txt || `${res.status}: ${res.statusText}`);
+    }
+  }
+  return res.json();
+}
+
 export async function setToken(token: string) {
   await storage.secureSet(TOKEN_KEY, token);
 }

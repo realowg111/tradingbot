@@ -7,7 +7,7 @@ import * as Clipboard from "expo-clipboard";
 
 import { Card, Button, Input, SectionTitle, Overline, Badge } from "@/src/components/ui";
 import { colors, spacing, fmt, radius } from "@/src/theme";
-import { apiGet, apiPost } from "@/src/api/client";
+import { apiGet, apiPost, apiPatch } from "@/src/api/client";
 import { useToast } from "@/src/components/Toast";
 
 export default function MT5Screen() {
@@ -54,15 +54,28 @@ export default function MT5Screen() {
 
   const save = async () => {
     setError(null);
-    if (!login || !password || !server) { setError("Login, mot de passe et serveur requis"); return; }
+    if (!login || !server) { setError("Login et serveur requis"); return; }
+    if (!existing && !password) { setError("Mot de passe requis pour la première sauvegarde"); return; }
     setBusy(true);
     try {
-      await apiPost("/mt5/credentials", { login, password, server, broker, path: path || null });
+      await apiPost("/mt5/credentials", { login, password: password || null, server, broker, path: path || null });
       toast.show({ type: "success", title: "Identifiants chiffrés", message: "AES-256 sauvegardés en sécurité" });
       setPassword("");
       await refreshAll();
     } catch (e: any) { setError(e.message); }
     finally { setBusy(false); }
+  };
+
+  const savePathOnly = async () => {
+    if (!path) { toast.show({ type: "warning", title: "Champ vide", message: "Renseigne le chemin d'abord" }); return; }
+    setBusy(true);
+    try {
+      await apiPatch("/mt5/credentials/path", { path });
+      toast.show({ type: "success", title: "Chemin sauvegardé", message: "Cliquez Connecter à MT5 pour tester" });
+      await refreshAll();
+    } catch (e: any) {
+      toast.show({ type: "danger", title: "Erreur", message: e.message });
+    } finally { setBusy(false); }
   };
 
   const connect = async () => {
@@ -288,6 +301,21 @@ export default function MT5Screen() {
           ) : null}
           {error ? <Text style={{ color: colors.danger, fontSize: 13, marginBottom: 8 }}>{error}</Text> : null}
           <Button title="Chiffrer & sauvegarder" onPress={save} loading={busy} icon="lock-closed" testID="mt5-save-button" />
+          {existing && path && path !== existing.path ? (
+            <View style={{ marginTop: 8 }}>
+              <Button
+                title="Sauvegarder uniquement le chemin"
+                onPress={savePathOnly}
+                loading={busy}
+                variant="outline"
+                icon="folder-outline"
+                testID="mt5-save-path-only-button"
+              />
+              <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 6, textAlign: "center", fontStyle: "italic" }}>
+                {"Met à jour le chemin sans toucher au login/mot de passe."}
+              </Text>
+            </View>
+          ) : null}
         </Card>
 
         <View style={{ height: spacing.xxl }} />
