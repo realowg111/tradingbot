@@ -1,6 +1,11 @@
-# Trading Bot — PRD (v5)
+# Trading Bot — PRD (v6)
 
-## Itération v5 (current)
+## Itération v6 (current) — Déblocage login + reconnexion VPS
+- **Réinitialisation mot de passe admin VPS** : script infaillible `scripts/vps_windows/reset_password.ps1` (Python encodé Base64 → écrit `C:\trading-bot\reset_pw.py` et l'exécute avec le venv). Credentials : `admin@trading.bot` / `Trading2025!` (VPS + sandbox).
+- **Fix critique** : le fork avait réinitialisé `EXPO_PUBLIC_BACKEND_URL` sur le backend sandbox Linux → c'était la cause du "identifiants invalides" ET du bandeau "backend Linux" sur la page MT5. Restauré vers le tunnel Cloudflare du VPS : `https://cult-spa-projectors-exceptional.trycloudflare.com`. Vérifié e2e (login + page MT5 OK, `has_native_lib: true`).
+- ⚠️ Le tunnel est un "quick tunnel" (URL éphémère) : si le VPS/cloudflared redémarre, l'URL change → il faudra mettre à jour `EXPO_PUBLIC_BACKEND_URL`. Roadmap : tunnel nommé (URL fixe).
+
+## Itération v5
 - **Détection dynamique du régime de marché** + **adaptation automatique** : nouveau module `services/market_regime.py`.
   - 4 régimes détectés par symbole (TREND_UP / TREND_DOWN / RANGE / VOLATILE) à partir de la stddev relative, du slope EMA et du range.
   - Filtrage adaptatif des stratégies : TREND → EMA_MACD+Multi, RANGE → Bollinger+RSI, VOLATILE → Multi (consensus).
