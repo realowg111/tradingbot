@@ -3,21 +3,18 @@
 This module attempts to use the official MetaTrader5 Python library
 (only available on Windows) to provide a live connection to MT5.
 
-Architecture:
-- On Windows: native MetaTrader5 lib is used directly.
-- On Linux (most VPS): the lib cannot be installed. The user must run
-  a small "MT5 bridge agent" on a Windows machine that exposes MT5
-  data over HTTP. Configure MT5_BRIDGE_URL in .env to use it.
-- Otherwise: connector is unavailable and the system falls back to the
-  internal simulator.
-
-The MT5Connector is read-only by default (sync of account/positions).
-Order execution via MT5 is enabled when `enable_trading=True`.
+IMPORTANT:
+- The MT5 desktop terminal MUST be running BEFORE the Python lib can attach to it.
+- On a Windows VPS with the backend running as a Windows Service (SYSTEM account),
+  the service CANNOT see an MT5 terminal launched in an interactive user session.
+  Either: (a) configure the service to run as the same Windows user that runs MT5,
+  or (b) pass the explicit `path` to terminal64.exe so the lib auto-launches MT5.
 """
 import os
 import asyncio
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional, Dict, List, Any
 
 import httpx
@@ -33,6 +30,44 @@ except Exception:
     HAS_MT5_NATIVE = False
 
 
+# Common install paths to probe when no explicit path is given.
+COMMON_MT5_PATHS = [
+    r"C:\Program Files\MetaTrader 5\terminal64.exe",
+    r"C:\Program Files\RoboForex - MetaTrader 5\terminal64.exe",
+    r"C:\Program Files\MetaTrader 5 RoboForex\terminal64.exe",
+    r"C:\Program Files\RoboForex MT5 Terminal\terminal64.exe",
+    r"C:\Program Files (x86)\MetaTrader 5\terminal64.exe",
+]
+
+
+def _autodetect_mt5_path() -> Optional[str]:
+    """Look for an installed MT5 terminal64.exe in common locations."""
+    # 1) explicit env var wins
+    env_path = os.environ.get("MT5_TERMINAL_PATH")
+    if env_path and Path(env_path).exists():
+        return env_path
+    # 2) probe known paths
+    for p in COMMON_MT5_PATHS:
+        if Path(p).exists():
+            return p
+    # 3) scan Program Files for any "terminal64.exe" under a folder matching MetaTrader
+    program_dirs = [r"C:\Program Files", r"C:\Program Files (x86)"]
+    for pd in program_dirs:
+        try:
+            base = Path(pd)
+            if not base.exists():
+                continue
+            for sub in base.iterdir():
+                name = sub.name.lower()
+                if "metatrader" in name or "roboforex" in name or "mt5" in name:
+                    candidate = sub / "terminal64.exe"
+                    if candidate.exists():
+                        return str(candidate)
+        except Exception:
+            continue
+    return None
+
+
 class MT5Connector:
     """Connector to MetaTrader 5 with auto-reconnection."""
 
@@ -45,20 +80,29 @@ class MT5Connector:
         self.broker: Optional[str] = None
         self.mode: str = "unavailable"  # "native" | "bridge" | "unavailable"
         self.bridge_url: Optional[str] = os.environ.get("MT5_BRIDGE_URL") or None
+        self.terminal_path: Optional[str] = None
         self._reconnect_task: Optional[asyncio.Task] = None
         self._password: Optional[str] = None
         self._client = httpx.AsyncClient(timeout=8.0)
 
     # ----- Connection lifecycle -----
-    async def connect(self, login: str, password: str, server: str, broker: Optional[str] = None) -> Dict[str, Any]:
-        """Attempt to connect to MT5. Returns status dict."""
+    async def connect(self, login: str, password: str, server: str, broker: Optional[str] = None, path: Optional[str] = None) -> Dict[str, Any]:
+        """Attempt to connect to MT5. Returns status dict.
+
+        ``path`` is the optional path to terminal64.exe. If provided (or
+        auto-detected), the lib will auto-launch MT5 if it's not already running.
+        """
         self.account_login = login
         self.server = server
         self.broker = broker
         self._password = password
 
         if HAS_MT5_NATIVE:
-            return await self._connect_native(login, password, server)
+            # Resolve terminal path: explicit > env > autodetect
+            resolved_path = path or _autodetect_mt5_path()
+            if resolved_path:
+                self.terminal_path = resolved_path
+            return await self._connect_native(login, password, server, resolved_path)
         if self.bridge_url:
             return await self._connect_bridge(login, password, server)
 
@@ -70,13 +114,22 @@ class MT5Connector:
         )
         return self.status()
 
-    async def _connect_native(self, login: str, password: str, server: str) -> Dict[str, Any]:
+    async def _connect_native(self, login: str, password: str, server: str, path: Optional[str] = None) -> Dict[str, Any]:
         try:
-            ok = await asyncio.to_thread(mt5.initialize, login=int(login), password=password, server=server)
+            # Build kwargs: include path only if available
+            init_kwargs: Dict[str, Any] = {
+                "login": int(login),
+                "password": password,
+                "server": server,
+            }
+            if path:
+                init_kwargs["path"] = path
+
+            ok = await asyncio.to_thread(lambda: mt5.initialize(**init_kwargs))
             if not ok:
                 err = mt5.last_error()
                 self.connected = False
-                self.last_error = f"MT5 initialize failed: {err}"
+                self.last_error = self._humanize_init_error(err, path)
                 return self.status()
             self.connected = True
             self.mode = "native"
@@ -88,6 +141,29 @@ class MT5Connector:
             self.connected = False
             self.last_error = str(e)
             return self.status()
+
+    @staticmethod
+    def _humanize_init_error(err: tuple, path: Optional[str]) -> str:
+        code, msg = err if isinstance(err, tuple) and len(err) == 2 else (None, str(err))
+        # Map common cryptic MT5 errors into actionable messages (FR)
+        if code == -10003 or "terminal" in str(msg).lower() and "not found" in str(msg).lower():
+            base = (
+                "Le terminal MetaTrader 5 est introuvable ou n'est pas démarré. "
+            )
+            if not path:
+                base += (
+                    "Astuce : ouvre MT5 manuellement sur le VPS (double-clic sur l'icône) "
+                    "et relance la connexion. Ou indique le chemin complet vers terminal64.exe "
+                    "dans le champ 'Chemin terminal' ci-dessous."
+                )
+            else:
+                base += (
+                    f"Le chemin testé est : {path}. Vérifie qu'il existe et que MT5 64-bit est bien installé."
+                )
+            return base
+        if code == -10004 or "auth" in str(msg).lower():
+            return "Authentification refusée. Vérifie le numéro de compte, le mot de passe et le nom du serveur."
+        return f"MT5 initialize failed: code={code} msg={msg}"
 
     async def _connect_bridge(self, login: str, password: str, server: str) -> Dict[str, Any]:
         try:
@@ -123,6 +199,7 @@ class MT5Connector:
         self.connected = False
 
     def status(self) -> Dict[str, Any]:
+        autodetected = _autodetect_mt5_path() if HAS_MT5_NATIVE else None
         return {
             "connected": self.connected,
             "mode": self.mode,
@@ -133,6 +210,8 @@ class MT5Connector:
             "broker": self.broker,
             "last_error": self.last_error,
             "last_heartbeat": self.last_heartbeat.isoformat() if self.last_heartbeat else None,
+            "terminal_path": self.terminal_path,
+            "autodetected_path": autodetected,
         }
 
     # ----- Auto-reconnect loop -----

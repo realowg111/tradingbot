@@ -19,6 +19,7 @@ export default function MT5Screen() {
   const [password, setPassword] = useState("");
   const [server, setServer] = useState("");
   const [broker, setBroker] = useState("");
+  const [path, setPath] = useState("");
   const [busy, setBusy] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,6 +35,7 @@ export default function MT5Screen() {
         setLogin(creds.login);
         setServer(creds.server);
         setBroker(creds.broker || "");
+        setPath(creds.path || "");
       }
       if (st) {
         setMt5Status(st.status);
@@ -54,7 +56,7 @@ export default function MT5Screen() {
     if (!login || !password || !server) { setError("Login, mot de passe et serveur requis"); return; }
     setBusy(true);
     try {
-      await apiPost("/mt5/credentials", { login, password, server, broker });
+      await apiPost("/mt5/credentials", { login, password, server, broker, path: path || null });
       toast.show({ type: "success", title: "Identifiants chiffrés", message: "AES-256 sauvegardés en sécurité" });
       setPassword("");
       await refreshAll();
@@ -195,13 +197,49 @@ export default function MT5Screen() {
           </Card>
         ) : null}
 
+        {/* Specific tip for VPS service not finding MT5 */}
+        {hasNative && !isConnected && mt5Status?.last_error?.includes("introuvable") ? (
+          <Card style={{ marginTop: spacing.md, backgroundColor: "#EEF2FF", borderColor: "#C7D2FE", borderWidth: 1 }}>
+            <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+              <Ionicons name="bulb-outline" size={18} color={colors.primary} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 13, fontWeight: "800", color: colors.primary, marginBottom: 6 }}>
+                  Comment résoudre sur votre VPS Windows
+                </Text>
+                <Text style={{ fontSize: 12, color: colors.textPrimary, lineHeight: 18 }}>
+                  Le backend tourne en tant que service Windows (compte SYSTEM) → il ne voit pas le MT5 ouvert dans votre session.{"\n\n"}
+                  <Text style={{ fontWeight: "700" }}>Solution la plus simple :</Text> renseignez le <Text style={{ fontWeight: "700" }}>chemin complet vers terminal64.exe</Text> dans le formulaire ci-dessous. La lib lancera MT5 automatiquement.{"\n\n"}
+                  <Text style={{ fontWeight: "700" }}>Chemin typique RoboForex :</Text>{"\n"}
+                  <Text style={{ fontFamily: "Courier", fontSize: 11 }}>
+                    C:\Program Files\RoboForex - MetaTrader 5\terminal64.exe
+                  </Text>{"\n\n"}
+                  {"Pour le trouver : clic droit sur l'icône MT5 du bureau → Propriétés → Cible."}
+                </Text>
+              </View>
+            </View>
+          </Card>
+        ) : null}
+
         {/* Credentials form */}
         <SectionTitle>{existing ? "Mettre à jour les identifiants" : "Saisir les identifiants"}</SectionTitle>
         <Card>
           <Input label="Login MT5 (numéro de compte)" value={login} onChangeText={setLogin} placeholder="12345678" keyboardType="numeric" testID="mt5-login-input" />
           <Input label="Mot de passe (chiffré AES-256)" value={password} onChangeText={setPassword} placeholder="••••••••" secureTextEntry testID="mt5-password-input" />
           <Input label="Serveur" value={server} onChangeText={setServer} placeholder="ICMarketsSC-Demo" autoCapitalize="none" testID="mt5-server-input" />
-          <Input label="Broker (optionnel)" value={broker} onChangeText={setBroker} placeholder="IC Markets" testID="mt5-broker-input" />
+          <Input label="Broker (optionnel)" value={broker} onChangeText={setBroker} placeholder="RoboForex" testID="mt5-broker-input" />
+          <Input
+            label="Chemin terminal64.exe (optionnel, recommandé sur VPS)"
+            value={path}
+            onChangeText={setPath}
+            placeholder="C:\Program Files\RoboForex - MetaTrader 5\terminal64.exe"
+            autoCapitalize="none"
+            testID="mt5-path-input"
+          />
+          {mt5Status?.autodetected_path && !path ? (
+            <Text style={{ fontSize: 11, color: colors.success, marginTop: -8, marginBottom: 12 }}>
+              ✓ Détecté automatiquement : {mt5Status.autodetected_path}
+            </Text>
+          ) : null}
           {error ? <Text style={{ color: colors.danger, fontSize: 13, marginBottom: 8 }}>{error}</Text> : null}
           <Button title="Chiffrer & sauvegarder" onPress={save} loading={busy} icon="lock-closed" testID="mt5-save-button" />
         </Card>

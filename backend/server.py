@@ -141,11 +141,12 @@ async def save_mt5(creds: MT5CredentialsIn, user: UserPublic = Depends(get_curre
     encrypted = encrypt_str(json.dumps({
         "login": creds.login, "password": creds.password,
         "server": creds.server, "broker": creds.broker,
+        "path": creds.path,
     }))
     await users_col.update_one({"id": user.id}, {"$set": {"mt5_credentials": encrypted}})
     await audit_col.insert_one(AuditLog(level="SYSTEM", event="mt5_credentials_updated",
                                         details={"user": user.email, "login": creds.login, "server": creds.server}).model_dump())
-    return MT5CredentialsOut(login=creds.login, server=creds.server, broker=creds.broker, saved=True)
+    return MT5CredentialsOut(login=creds.login, server=creds.server, broker=creds.broker, path=creds.path, saved=True)
 
 
 @api.get("/mt5/credentials", response_model=Optional[MT5CredentialsOut])
@@ -154,7 +155,7 @@ async def get_mt5(user: UserPublic = Depends(get_current_user)):
     if not doc or "mt5_credentials" not in doc:
         return None
     data = json.loads(decrypt_str(doc["mt5_credentials"]))
-    return MT5CredentialsOut(login=data["login"], server=data["server"], broker=data.get("broker"), saved=True)
+    return MT5CredentialsOut(login=data["login"], server=data["server"], broker=data.get("broker"), path=data.get("path"), saved=True)
 
 
 # --- Bot config & state ---
@@ -760,6 +761,7 @@ async def mt5_connect(user: UserPublic = Depends(get_current_user)):
     result = await mt5_connector.connect(
         login=creds["login"], password=creds["password"],
         server=creds["server"], broker=creds.get("broker"),
+        path=creds.get("path"),
     )
     await audit_col.insert_one(AuditLog(
         level="SYSTEM", event="mt5_connect_attempt",

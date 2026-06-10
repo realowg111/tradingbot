@@ -5,6 +5,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
 import { Card, Overline } from "@/src/components/ui";
+import { AnimatedSection, PulseDot } from "@/src/components/AnimatedSection";
 import { colors, spacing, radius } from "@/src/theme";
 import { useAuth } from "@/src/context/AuthContext";
 
@@ -28,46 +29,54 @@ export default function More() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Overline>Console</Overline>
-        <Text style={styles.title}>Paramètres & Modules</Text>
+        <AnimatedSection index={0}>
+          <Overline>Console</Overline>
+          <Text style={styles.title}>Paramètres & Modules</Text>
+        </AnimatedSection>
 
-        <Card style={{ marginTop: spacing.md }}>
-          <View style={styles.userRow}>
-            <View style={styles.avatar}><Ionicons name="person" size={20} color={colors.white} /></View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.userEmail}>{user?.email}</Text>
-              <Text style={styles.userRole}>{user?.is_admin ? "Administrateur" : "Utilisateur"}</Text>
+        <AnimatedSection index={1}>
+          <Card style={{ marginTop: spacing.md }}>
+            <View style={styles.userRow}>
+              <View style={styles.avatar}><Ionicons name="person" size={20} color={colors.white} /></View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.userEmail}>{user?.email}</Text>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <PulseDot size={6} color={colors.success} />
+                  <Text style={styles.userRole}>{user?.is_admin ? "Administrateur" : "Utilisateur"} · session active</Text>
+                </View>
+              </View>
+              <TouchableOpacity onPress={logout} style={styles.logoutBtn} testID="logout-button">
+                <Ionicons name="log-out-outline" size={18} color={colors.danger} />
+                <Text style={{ color: colors.danger, fontSize: 12, fontWeight: "700" }}>Déconnexion</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={logout} style={styles.logoutBtn} testID="logout-button">
-              <Ionicons name="log-out-outline" size={18} color={colors.danger} />
-              <Text style={{ color: colors.danger, fontSize: 12, fontWeight: "700" }}>Déconnexion</Text>
-            </TouchableOpacity>
-          </View>
-        </Card>
+          </Card>
+        </AnimatedSection>
 
         <View style={{ marginTop: spacing.md, gap: spacing.sm }}>
-          {items.map((it) => (
-            <TouchableOpacity
-              key={it.id}
-              testID={it.testId}
-              activeOpacity={0.85}
-              onPress={() => router.push(it.href as any)}
-            >
-              <Card>
-                <View style={styles.itemRow}>
-                  <View style={styles.itemIcon}><Ionicons name={it.icon} size={20} color={colors.primary} /></View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.itemLabel}>{it.label}</Text>
-                    <Text style={styles.itemDesc}>{it.description}</Text>
+          {items.map((it, idx) => (
+            <AnimatedSection key={it.id} index={2 + idx}>
+              <TouchableOpacity
+                testID={it.testId}
+                activeOpacity={0.85}
+                onPress={() => router.push(it.href as any)}
+              >
+                <Card>
+                  <View style={styles.itemRow}>
+                    <View style={styles.itemIcon}><Ionicons name={it.icon} size={20} color={colors.primary} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.itemLabel}>{it.label}</Text>
+                      <Text style={styles.itemDesc}>{it.description}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
                   </View>
-                  <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-                </View>
-              </Card>
-            </TouchableOpacity>
+                </Card>
+              </TouchableOpacity>
+            </AnimatedSection>
           ))}
         </View>
 
-        <Text style={styles.footer}>Trading Bot v1.0.0 · Console Pro</Text>
+        <Text style={styles.footer}>Trading Bot v1.2.0 · Console Pro</Text>
         <View style={{ height: spacing.xxl }} />
       </ScrollView>
     </SafeAreaView>

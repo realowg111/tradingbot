@@ -42,12 +42,14 @@ class MT5CredentialsIn(BaseModel):
     password: str
     server: str
     broker: Optional[str] = None
+    path: Optional[str] = None  # Optional explicit path to terminal64.exe
 
 
 class MT5CredentialsOut(BaseModel):
     login: str
     server: str
     broker: Optional[str] = None
+    path: Optional[str] = None
     saved: bool = True
 
 
