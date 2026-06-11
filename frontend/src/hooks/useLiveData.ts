@@ -16,6 +16,8 @@ export type LivePosition = {
   stop_loss: number;
   take_profit: number;
   strategy: string;
+  origin?: "bot" | "manual";
+  source?: "mt5" | "sim";
   mode: string;
   opened_at: string;
 };
@@ -45,6 +47,11 @@ export type LiveSnapshot = {
     paused_reason?: string | null;
     kill_switch_engaged: boolean;
     real_unlocked: boolean;
+    source?: "mt5" | "sim" | "mt5_stale";
+    margin?: number;
+    free_margin?: number;
+    account_currency?: string;
+    leverage?: number | null;
   };
   config_mode: "demo" | "real";
   config_enabled: boolean;

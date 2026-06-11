@@ -83,6 +83,9 @@ class RiskConfig(BaseModel):
     stop_loss_pct: float = 1.0            # %
     take_profit_pct: float = 2.0          # %
     daily_drawdown_limit_pct: float = 5.0
+    weekly_loss_limit_pct: float = 10.0   # pause new trades if weekly loss exceeds
+    max_total_drawdown_pct: float = 20.0  # pause if equity drops X% below peak
+    max_spread_pct: float = 0.1           # skip entry if relative spread > 0.1%
     max_open_positions: int = 5
     max_trades_per_day: int = 20
     volatility_pause: bool = True
@@ -136,6 +139,9 @@ class BotState(BaseModel):
     trades_today: int = 0
     daily_start_balance: float = 10000.0
     last_daily_reset: datetime = Field(default_factory=utc_now)
+    week_start_equity: float = 0.0
+    last_weekly_reset: Optional[datetime] = None
+    peak_equity: float = 0.0
     paused_reason: Optional[str] = None
     paper_start: datetime = Field(default_factory=utc_now)
     real_unlocked: bool = False

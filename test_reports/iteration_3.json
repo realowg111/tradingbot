@@ -1,0 +1,66 @@
+{
+  "summary": "Backend-only regression for the 'MT5 = source of truth' refactor + new risk guard-rails + removed real-mode confirmation phrase. Added /app/backend/tests/test_source_of_truth.py with 14 new tests. Full suite: 56/56 PASSED in 46.94s (42 previous + 14 new). All target features verified against LOCAL backend (http://localhost:8001) only — the user's live VPS (EXPO_PUBLIC_BACKEND_URL) was never called. Local bot restored to demo + disabled at end of run. On Linux backend, MT5 native lib unavailable so state.source is always 'sim' (expected behaviour). New unified /api/bot/state shape verified (state.source, margin, free_margin, account_currency, leverage, config_mode, config_enabled, positions, mt5_status, mt5_account). New metrics fields verified (pnl_today, pnl_week, pnl_month, avg_win, avg_loss, win_loss_ratio, source). MT5 credentials trimming + first-save-without-password rejection + resave-without-password preservation verified. Mode switch to real WITHOUT confirmation_phrase returns 200 as expected. WebSocket snapshot includes state.source + positions.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "passlib/bcrypt",
+        "issue": "Cosmetic: 'AttributeError: module bcrypt has no attribute __about__' on passlib import (still present, login works). Pin bcrypt<4 or upgrade passlib to silence. Same as previous iterations."
+      },
+      {
+        "endpoint": "POST /api/bot/mode",
+        "issue": "Naming inconsistency in the review request: the spec mentions POST /api/bot/config/risk but the actual endpoint is PUT /api/bot/risk (which DOES accept the new fields weekly_loss_limit_pct, max_total_drawdown_pct, max_spread_pct). Tests use the correct PUT path. Just flagging in case the main agent wants to expose an alias for clarity."
+      },
+      {
+        "endpoint": "GET /api/bot/state (real mode, MT5 disconnected)",
+        "issue": "In real mode with MT5 disconnected on Linux, state.source returns 'sim' (because live_account.is_live=False when mt5 not connected). The PRD distinguishes 'mt5_stale' (connected but no account) from 'sim' (no live mode). Current path is consistent with the code but the UI may want a dedicated 'real_no_mt5' source label so the user understands 'I am in real mode but seeing the simulator'. Cosmetic / UX, not a bug."
+      },
+      {
+        "endpoint": "WebSocket /api/ws auth scheme",
+        "issue": "Token still in query string ?token=<JWT> (logged by uvicorn). Optional hardening, same as iteration 2."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_backend_api.py",
+    "/app/backend/tests/test_live_account.py",
+    "/app/backend/tests/test_mt5_ws.py",
+    "/app/backend/tests/test_source_of_truth.py",
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/pytest.ini",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Nothing blocking — all 56 backend tests green.",
+    "Optional: pin bcrypt<4 in /app/backend/requirements.txt to remove passlib warning.",
+    "Optional UX: differentiate 'sim' vs 'real_no_mt5' in state.source so the UI can clearly tell the user 'You are in real mode but MT5 is not connected — values shown come from the simulator'.",
+    "Optional: split /app/backend/server.py (now 1100 lines) into routers/{auth,bot,trades,mt5,ws,costs,backtest}.py — same recommendation since iteration 1.",
+    "Optional: extract _build_snapshot_data() duplication in _send_snapshot vs _ws_broadcast_loop (DRY — flagged iteration 2).",
+    "Optional: harden WS auth (avoid token in query string)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 1100 lines (1.5x the 700-line threshold). Strongly recommend splitting into routers/.",
+    "live_account.resolve_state: '_daily_cache' is a module-level dict mutated without a lock — fine in single-process uvicorn but would break under multi-worker deployment. Use asyncio.Lock or per-user caching keyed by user id.",
+    "live_account.resolve_state: in real mode when mt5 returns no account, source='mt5_stale' but the other fields (balance/equity) keep the LAST sim values from state.model_dump(); these may mislead the UI. Consider returning None or zeroing those fields, or attaching a 'last_seen_at' timestamp.",
+    "_resolve_trades treats mode='real' specially but if the user requests mode='demo' explicitly while MT5 is connected and bot is in 'real' mode, demo trades are correctly returned. Good. However, when mode is None and cfg.mode='real' but MT5 disconnected, the helper falls back to ALL trades (no mode filter) instead of cfg.mode='real' trades. Consider always filtering by cfg.mode when mode is None.",
+    "services/mt5_broker.disconnect() does not reset self.mode='unavailable' nor clear last_error / last_heartbeat (flagged iteration 2 — still present).",
+    "WebSocket /api/ws is registered on the raw `app` rather than the `api` router (cosmetic, works because the path is hard-coded).",
+    "models.RiskConfig.max_spread_pct default 0.1% is quite tight for crypto symbols like BTCUSD where intraday spread often exceeds 0.1%. Consider a per-symbol override or a higher default for the crypto bucket.",
+    "models._clean_str strips wrapping single/double quotes — fine for human typos but could silently break a legitimate broker password that contains leading/trailing quotes. Acceptable trade-off but worth documenting in the API doc."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_source_of_truth.py (created — 14 new tests)"
+  ],
+  "success_rate": {"backend": "100% (56/56)", "frontend": "not tested (backend-only request, explicit interdiction on VPS)"},
+  "seed_data_creation": "Tests overwrite admin MT5 credentials twice (login='123' and login='987654' with 'PreservedPwd!'). Each TestMT5CredentialsTrimMerge test creates one ephemeral test_mt5_trim_<uuid>@example.com user (no cleanup). Test data is harmless and confined to the local Mongo (DB_NAME=trading_bot). Local bot is forcibly reset to mode=demo + enabled=false in the final teardown test.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend is healthy: 56/56. Local Mongo (trading_bot) has been mutated by tests: admin user now has MT5 credentials login='987654', server='ICMarkets-Live', path='C:\\\\Program Files\\\\MetaTrader 5\\\\terminal64.exe' (encrypted) — re-run TestMT5 in test_backend_api.py if you need them reset. Bot is left in mode=demo + enabled=false. Admin: admin@trading.bot / Trading2025!. Local backend URL: http://localhost:8001 (ingress: https://autotrader-hub-28.preview.emergentagent.com/api). NEVER call EXPO_PUBLIC_BACKEND_URL from /app/frontend/.env — that points to the user's REAL trading VPS. On Linux, MT5 native lib unavailable so state.source is always 'sim' and mt5_status.connected=false — that is expected.",
+  "rca_of_issue": "No bug discovered this iteration. The refactor 'MT5 = source of truth' is correctly implemented: in demo mode all account data comes from BotState + market simulator (source='sim'); in real mode with MT5 connected, balance/equity/margin/free_margin/positions come from mt5_connector.get_account_info/get_positions (source='mt5'); when in real mode but MT5 unreachable, the system falls back to the sim values (source='sim') so the UI never breaks. The confirmation phrase gate has been removed from /api/bot/mode (paper_validation_enabled=False by default). New risk fields (weekly_loss_limit_pct, max_total_drawdown_pct, max_spread_pct) are wired through RiskConfig -> persisted via PUT /api/bot/risk -> consumed in bot_runner.py guard-rails."
+}

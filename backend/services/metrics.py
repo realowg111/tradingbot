@@ -2,6 +2,8 @@
 import math
 from typing import List, Dict
 
+from services.live_account import period_pnl
+
 
 def compute_metrics(trades: List[Dict], starting_balance: float = 10000.0) -> Dict:
     if not trades:
@@ -18,6 +20,12 @@ def compute_metrics(trades: List[Dict], starting_balance: float = 10000.0) -> Di
             "sharpe": 0.0,
             "best_trade": 0.0,
             "worst_trade": 0.0,
+            "avg_win": 0.0,
+            "avg_loss": 0.0,
+            "win_loss_ratio": 0.0,
+            "pnl_today": 0.0,
+            "pnl_week": 0.0,
+            "pnl_month": 0.0,
         }
 
     pnls = [t.get("pnl", 0.0) for t in trades]
@@ -72,4 +80,8 @@ def compute_metrics(trades: List[Dict], starting_balance: float = 10000.0) -> Di
         "sharpe": round(sharpe, 2),
         "best_trade": round(max(pnls), 2),
         "worst_trade": round(min(pnls), 2),
+        "avg_win": round(avg_win, 2),
+        "avg_loss": round(avg_loss, 2),
+        "win_loss_ratio": round(abs(avg_win / avg_loss), 2) if avg_loss != 0 else 0.0,
+        **period_pnl(trades),
     }

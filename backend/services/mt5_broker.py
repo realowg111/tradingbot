@@ -338,14 +338,21 @@ class MT5Connector:
         try:
             if self.mode == "native" and HAS_MT5_NATIVE:
                 from datetime import timedelta
+                # Wide window with future margin: broker server time can be ahead of UTC
                 date_from = datetime.now() - timedelta(days=days)
-                deals = await asyncio.to_thread(mt5.history_deals_get, date_from, datetime.now())
+                date_to = datetime.now() + timedelta(days=2)
+                deals = await asyncio.to_thread(mt5.history_deals_get, date_from, date_to)
                 if not deals:
                     return []
                 return [{
                     "ticket": d.ticket,
+                    "position_id": d.position_id,
+                    "order": d.order,
                     "symbol": d.symbol,
                     "type": d.type,
+                    "entry": d.entry,
+                    "magic": d.magic,
+                    "comment": d.comment,
                     "volume": d.volume,
                     "price": d.price,
                     "profit": d.profit,
@@ -360,6 +367,16 @@ class MT5Connector:
         except Exception as e:
             logger.warning("get_history_deals error: %s", e)
         return []
+
+    async def get_spread_pct(self, symbol: str) -> Optional[float]:
+        """Relative spread in % of price (e.g. 0.002 = 0.002%). None if unavailable."""
+        tick = await self.get_price(symbol)
+        if not tick or not tick.get("bid") or not tick.get("ask"):
+            return None
+        mid = (tick["bid"] + tick["ask"]) / 2
+        if mid <= 0:
+            return None
+        return ((tick["ask"] - tick["bid"]) / mid) * 100
 
     # ----- Trading: place / close orders on MT5 -----
     async def place_order(self, symbol: str, side: str, volume: float, sl: float, tp: float, comment: str = "TradingBot") -> Dict[str, Any]:

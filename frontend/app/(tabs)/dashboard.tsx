@@ -67,6 +67,8 @@ export default function Dashboard() {
   const mode = snapshot?.config_mode ?? "demo";
   const enabled = snapshot?.config_enabled ?? false;
   const mt5 = snapshot?.mt5_status;
+  const isLiveMt5 = state?.source === "mt5";
+  const currency = state?.account_currency ?? "USD";
   const equityVal = state?.equity ?? 0;
   const balanceVal = state?.balance ?? 0;
   const dailyPnl = state?.daily_pnl ?? 0;
@@ -143,18 +145,24 @@ export default function Dashboard() {
         <View style={styles.heroCard}>
           <View style={styles.heroTop}>
             <View>
-              <Text style={styles.heroLabel}>Équity totale</Text>
-              <Text style={styles.heroValue} testID="balance-value">{fmt.money(equityVal, "USD")}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Text style={styles.heroLabel}>Équity totale</Text>
+                <View style={[styles.sourceBadge, { backgroundColor: isLiveMt5 ? "rgba(16,185,129,0.25)" : "rgba(245,158,11,0.25)" }]} testID="account-source-badge">
+                  <View style={[styles.sourceDot, { backgroundColor: isLiveMt5 ? "#34D399" : "#FBBF24" }]} />
+                  <Text style={[styles.sourceBadgeText, { color: isLiveMt5 ? "#6EE7B7" : "#FCD34D" }]}>
+                    {isLiveMt5 ? "LIVE MT5" : "SIMULATION"}
+                  </Text>
+                </View>
+              </View>
+              <Text style={styles.heroValue} testID="balance-value">{fmt.money(equityVal, currency)}</Text>
               <View style={styles.heroPnlRow}>
                 <View style={[styles.miniBadge, { backgroundColor: totalPnl >= 0 ? "rgba(16,185,129,0.15)" : "rgba(239,68,68,0.15)" }]}>
                   <Ionicons name={totalPnl >= 0 ? "trending-up" : "trending-down"} size={12} color={totalPnl >= 0 ? "#34D399" : "#FCA5A5"} />
                   <Text style={[styles.miniBadgeText, { color: totalPnl >= 0 ? "#6EE7B7" : "#FCA5A5" }]} testID="pnl-total">
-                    {totalPnl >= 0 ? "+" : ""}{fmt.money(totalPnl, "USD")}
+                    {totalPnl >= 0 ? "+" : ""}{fmt.money(totalPnl, currency)}
                   </Text>
                 </View>
-                <Text style={styles.heroPct}>
-                  {dailyPnl >= 0 ? "+" : ""}{fmt.pct(dailyPct)} aujourd'hui
-                </Text>
+                <Text style={styles.heroPct}>{`${dailyPnl >= 0 ? "+" : ""}${fmt.pct(dailyPct)} aujourd'hui`}</Text>
               </View>
             </View>
             {/* ON/OFF Toggle Button - prominent */}
@@ -181,14 +189,19 @@ export default function Dashboard() {
           <View style={styles.heroFooterRow}>
             <View style={styles.heroFooterCell}>
               <Text style={styles.heroFooterLabel}>Balance</Text>
-              <Text style={styles.heroFooterValue} testID="hero-balance">{fmt.money(balanceVal, "USD")}</Text>
+              <Text style={styles.heroFooterValue} testID="hero-balance">{fmt.money(balanceVal, currency)}</Text>
             </View>
             <View style={styles.heroFooterDivider} />
             <View style={styles.heroFooterCell}>
-              <Text style={styles.heroFooterLabel}>P&L latent</Text>
+              <Text style={styles.heroFooterLabel}>P&L flottant</Text>
               <Text style={[styles.heroFooterValue, { color: unrealized >= 0 ? "#6EE7B7" : "#FCA5A5" }]} testID="hero-unrealized">
-                {fmt.money(unrealized, "USD")}
+                {fmt.money(unrealized, currency)}
               </Text>
+            </View>
+            <View style={styles.heroFooterDivider} />
+            <View style={styles.heroFooterCell}>
+              <Text style={styles.heroFooterLabel}>Marge libre</Text>
+              <Text style={styles.heroFooterValue} testID="hero-free-margin">{fmt.money(state?.free_margin ?? 0, currency)}</Text>
             </View>
             <View style={styles.heroFooterDivider} />
             <View style={styles.heroFooterCell}>
@@ -203,23 +216,23 @@ export default function Dashboard() {
           <StatTile
             icon="trending-up"
             label="P&L jour"
-            value={fmt.money(dailyPnl, "USD")}
+            value={fmt.money(dailyPnl, currency)}
             tone={dailyPnl >= 0 ? "success" : "danger"}
             testID="tile-daily-pnl"
           />
           <StatTile
-            icon="checkmark-circle"
-            label="Winrate"
-            value={metrics?.total_trades > 0 ? fmt.pct(metrics.winrate) : "—"}
-            tone={metrics && metrics.winrate >= 50 ? "success" : metrics?.total_trades > 0 ? "danger" : "neutral"}
-            testID="tile-winrate"
+            icon="calendar"
+            label="P&L 7 jours"
+            value={metrics?.pnl_week !== undefined ? fmt.money(metrics.pnl_week, currency) : "—"}
+            tone={(metrics?.pnl_week ?? 0) >= 0 ? "success" : "danger"}
+            testID="tile-week-pnl"
           />
           <StatTile
-            icon="bar-chart"
-            label="Trades"
-            value={`${metrics?.total_trades ?? 0}`}
-            tone="neutral"
-            testID="tile-trades"
+            icon="stats-chart"
+            label="P&L 30 jours"
+            value={metrics?.pnl_month !== undefined ? fmt.money(metrics.pnl_month, currency) : "—"}
+            tone={(metrics?.pnl_month ?? 0) >= 0 ? "success" : "danger"}
+            testID="tile-month-pnl"
           />
         </View>
 
@@ -240,16 +253,16 @@ export default function Dashboard() {
         {/* Metrics */}
         {metrics && metrics.total_trades > 0 ? (
           <>
-            <SectionRow title="Performances" count={null} />
+            <SectionRow title="Performances" count={metrics.total_trades} />
             <Card style={{ marginTop: 0 }}>
               <View style={styles.metricsGrid}>
                 <MetricCell label="Winrate" value={fmt.pct(metrics.winrate)} accent={metrics.winrate >= 50 ? colors.success : colors.danger} testID="metric-winrate" />
                 <MetricCell label="Profit Factor" value={(metrics.profit_factor || 0).toFixed(2)} accent={colors.textPrimary} testID="metric-pf" />
-                <MetricCell label="Sharpe" value={(metrics.sharpe || 0).toFixed(2)} accent={colors.textPrimary} testID="metric-sharpe" />
+                <MetricCell label="Ratio G/P" value={(metrics.win_loss_ratio || 0).toFixed(2)} accent={colors.textPrimary} testID="metric-wlr" />
               </View>
               <View style={[styles.metricsGrid, { marginTop: spacing.md }]}>
                 <MetricCell label="Drawdown" value={fmt.pct(metrics.max_drawdown_pct)} accent={colors.danger} testID="metric-dd" />
-                <MetricCell label="Expectancy" value={fmt.money(metrics.expectancy, "USD")} accent={metrics.expectancy >= 0 ? colors.success : colors.danger} testID="metric-exp" />
+                <MetricCell label="Expectancy" value={fmt.money(metrics.expectancy, currency)} accent={metrics.expectancy >= 0 ? colors.success : colors.danger} testID="metric-exp" />
                 <MetricCell label="W/L" value={`${metrics.wins}/${metrics.losses}`} accent={colors.textPrimary} testID="metric-wl" />
               </View>
             </Card>
@@ -491,6 +504,11 @@ const styles = StyleSheet.create({
   posRight: { alignItems: "flex-end" },
   posPnl: { fontSize: 14, fontWeight: "800" },
   posPrice: { fontSize: 11, color: colors.textSecondary, fontFamily: "Courier", marginTop: 2 },
+  manualChip: { backgroundColor: colors.surfaceAlt, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: colors.border },
+  manualChipText: { fontSize: 8, fontWeight: "800", color: colors.textSecondary, letterSpacing: 1 },
+  sourceBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 100 },
+  sourceDot: { width: 5, height: 5, borderRadius: 3 },
+  sourceBadgeText: { fontSize: 9, fontWeight: "800", letterSpacing: 1 },
 
   metricsGrid: { flexDirection: "row" },
   metricCell: { flex: 1 },

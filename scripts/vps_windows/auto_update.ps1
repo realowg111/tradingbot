@@ -46,9 +46,17 @@ try {
         & "$AppDir\venv\Scripts\pip.exe" install -r "$AppDir\backend\requirements.txt" --upgrade
     }
 
-    # 3. Restart backend service
-    Write-Log "Redemarrage TradingBotBackend..."
-    Restart-Service -Name TradingBotBackend -Force
+    # 3. Restart backend (Scheduled Task - interactive session, requis pour MT5)
+    # Note: uvicorn tourne avec --reload, le git pull recharge le code automatiquement.
+    # On ne redemarre la tache que si les dependances ont change.
+    if ($requirementsChanged) {
+        Write-Log "Redemarrage de la tache TradingBotBackend..."
+        schtasks /End /TN "TradingBotBackend" 2>$null
+        Start-Sleep -Seconds 3
+        schtasks /Run /TN "TradingBotBackend"
+    } else {
+        Write-Log "Hot reload uvicorn: pas de redemarrage necessaire."
+    }
 
     # 4. Health check apres restart (5 tentatives, 5s entre chaque)
     Start-Sleep -Seconds 5
@@ -70,7 +78,9 @@ try {
     if (-not $ok) {
         Write-Log "ECHEC: backend ne repond pas apres update. Rollback..."
         git reset --hard $before
-        Restart-Service -Name TradingBotBackend -Force
+        schtasks /End /TN "TradingBotBackend" 2>$null
+        Start-Sleep -Seconds 3
+        schtasks /Run /TN "TradingBotBackend"
         Write-Log "Rollback effectue vers $before"
         exit 1
     }

@@ -1,19 +1,16 @@
-"""Shared pytest fixtures for backend tests."""
+"""Shared pytest fixtures for backend tests.
+
+Tests ALWAYS target the LOCAL backend (never the user's live VPS).
+Override with BACKEND_TEST_URL if needed.
+"""
 import os
 import pytest
 import requests
-from pathlib import Path
-from dotenv import load_dotenv
 
-# Load frontend .env to get the public backend URL used by the app
-load_dotenv(Path(__file__).resolve().parents[2] / "frontend" / ".env")
-
-BASE_URL = os.environ.get("EXPO_PUBLIC_BACKEND_URL", "").rstrip("/")
-if not BASE_URL:
-    raise RuntimeError("EXPO_PUBLIC_BACKEND_URL is not set in frontend/.env")
+BASE_URL = os.environ.get("BACKEND_TEST_URL", "http://localhost:8001").rstrip("/")
 
 ADMIN_EMAIL = "admin@trading.bot"
-ADMIN_PASSWORD = "Admin123!"
+ADMIN_PASSWORD = "Trading2025!"
 
 
 @pytest.fixture(scope="session")

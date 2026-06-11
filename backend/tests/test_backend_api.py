@@ -21,7 +21,7 @@ DB_NAME = os.environ.get("DB_NAME", "trading_bot")
 class TestAuth:
     def test_login_admin_success(self, base_url, api_client):
         r = api_client.post(f"{base_url}/api/auth/login",
-                            json={"email": "admin@trading.bot", "password": "Admin123!"})
+                            json={"email": "admin@trading.bot", "password": "Trading2025!"})
         assert r.status_code == 200, r.text
         data = r.json()
         assert "access_token" in data and data["token_type"] == "bearer"
@@ -116,18 +116,20 @@ class TestKillSwitch:
 
 # ============ MODE SWITCH =================================================
 class TestModeSwitch:
-    def test_switch_to_real_without_phrase_rejected(self, base_url, auth_headers):
+    def test_switch_to_real_without_phrase_works(self, base_url, auth_headers):
+        """Phrase removed per user request: switching to real is direct."""
         r = requests.post(f"{base_url}/api/bot/mode", headers=auth_headers,
                           json={"target_mode": "real"})
-        assert r.status_code == 400, r.text
-        assert "confirmation" in r.text.lower() or "phrase" in r.text.lower()
+        assert r.status_code == 200, r.text
+        assert r.json()["mode"] == "real"
 
-    def test_switch_to_real_with_phrase_blocked_by_validation(self, base_url, auth_headers):
+    def test_switch_to_real_no_validation_gate(self, base_url, auth_headers):
+        """Paper validation gates disabled by default."""
+        requests.post(f"{base_url}/api/bot/mode", headers=auth_headers, json={"target_mode": "demo"})
         r = requests.post(f"{base_url}/api/bot/mode", headers=auth_headers,
                           json={"target_mode": "real",
                                 "confirmation_phrase": "JE CONFIRME LE PASSAGE EN REEL"})
-        # Expected to be rejected due to validation_days / trades / winrate criteria
-        assert r.status_code == 400, r.text
+        assert r.status_code == 200, r.text
 
     def test_switch_to_demo_always_works(self, base_url, auth_headers):
         r = requests.post(f"{base_url}/api/bot/mode", headers=auth_headers,

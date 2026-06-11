@@ -46,6 +46,7 @@ from services.paper_engine import market, SYMBOL_SPECS
 from services.strategies import STRATEGIES
 from services.metrics import compute_metrics
 from services.mt5_broker import mt5_connector
+from services import live_account
 from services.ws_hub import ws_hub
 from services import ai_journal
 from services.market_regime import regime_store, detect_regime
@@ -207,15 +208,7 @@ async def get_config(user: UserPublic = Depends(get_current_user)):
 
 @api.get("/bot/state")
 async def get_state(user: UserPublic = Depends(get_current_user)):
-    state = await _get_state()
-    cfg = await _get_config()
-    prices = {s: market.get_price(s) for s in cfg.symbols}
-    return {
-        "state": state.model_dump(),
-        "config_mode": cfg.mode,
-        "config_enabled": cfg.enabled,
-        "prices": prices,
-    }
+    return await _build_snapshot_data()
 
 
 @api.post("/bot/toggle")
@@ -365,10 +358,9 @@ async def strategies_list(user: UserPublic = Depends(get_current_user)):
 
 
 # --- Positions & trades ---
-@api.get("/positions/open")
-async def open_positions(user: UserPublic = Depends(get_current_user)):
-    docs = await positions_col.find({"status": "OPEN"}, {"_id": 0}).sort("opened_at", -1).to_list(200)
-    # Add current price & unrealized pnl
+async def _sim_open_positions(mode: str):
+    """Internal simulator positions for the given mode, enriched with live price."""
+    docs = await positions_col.find({"status": "OPEN", "mode": mode}, {"_id": 0}).sort("opened_at", -1).to_list(200)
     for d in docs:
         price = market.get_price(d["symbol"])
         d["current_price"] = price
@@ -382,11 +374,35 @@ async def open_positions(user: UserPublic = Depends(get_current_user)):
                 d["unrealized_pnl"] = round((entry - price) * qty, 2)
         else:
             d["unrealized_pnl"] = 0.0
+        d["source"] = "sim"
+        if isinstance(d.get("opened_at"), datetime):
+            d["opened_at"] = d["opened_at"].isoformat()
     return docs
+
+
+@api.get("/positions/open")
+async def open_positions(user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    if live_account.is_live(cfg):
+        return await live_account.live_positions()
+    return await _sim_open_positions(cfg.mode)
 
 
 @api.post("/positions/{position_id}/close")
 async def close_position_manual(position_id: str, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    # Live mode: position_id is the MT5 ticket -> close on the broker
+    if live_account.is_live(cfg) and position_id.isdigit():
+        result = await mt5_connector.close_position(int(position_id))
+        await audit_col.insert_one(AuditLog(level="TRADE", event="mt5_manual_close",
+                                            details={"ticket": position_id, "ok": result.get("ok"),
+                                                     "error": result.get("error"), "user": user.email}).model_dump())
+        if not result.get("ok"):
+            raise HTTPException(400, f"Fermeture MT5 échouée: {result.get('error')}")
+        # Mark the local mirror (if any) as closed
+        await positions_col.update_one({"mt5_ticket": int(position_id)}, {"$set": {"status": "CLOSED"}})
+        return {"closed": True, "price": result.get("price"), "source": "mt5"}
+
     pos = await positions_col.find_one({"id": position_id, "status": "OPEN"}, {"_id": 0})
     if not pos:
         raise HTTPException(404, "Position introuvable")
@@ -426,35 +442,59 @@ async def close_position_manual(position_id: str, user: UserPublic = Depends(get
     return {"closed": True, "pnl": round(pnl, 2)}
 
 
-@api.get("/trades")
-async def trades_list(limit: int = 100, mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
+async def _resolve_trades(mode: Optional[str], cfg) -> tuple:
+    """Resolve the trade list source.
+
+    Returns (trades, source). MT5 history is used when the requested mode is
+    'real' (or unspecified while the bot is in real mode) and MT5 is connected.
+    """
+    wants_real = mode == "real" or (mode is None and cfg.mode == "real")
+    if wants_real and mt5_connector.connected:
+        trades = await live_account.mt5_trades(days=90)
+        return trades, "mt5"
     q = {}
     if mode:
         q["mode"] = mode
-    docs = await trades_col.find(q, {"_id": 0}).sort("closed_at", -1).to_list(limit)
-    return docs
+    docs = await trades_col.find(q, {"_id": 0}).sort("closed_at", -1).to_list(10000)
+    return docs, "sim"
+
+
+@api.get("/trades")
+async def trades_list(limit: int = 100, mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
+    cfg = await _get_config()
+    trades, _ = await _resolve_trades(mode, cfg)
+    return trades[:limit]
 
 
 @api.get("/trades/metrics")
 async def trades_metrics(mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
     cfg = await _get_config()
-    q = {}
-    if mode:
-        q["mode"] = mode
-    docs = await trades_col.find(q, {"_id": 0}).to_list(10000)
-    return compute_metrics(docs, cfg.starting_balance)
+    trades, source = await _resolve_trades(mode, cfg)
+    if source == "mt5":
+        account = await mt5_connector.get_account_info()
+        balance = account["balance"] if account else 0.0
+        starting = balance - sum(t.get("pnl", 0.0) for t in trades)
+        result = compute_metrics(list(reversed(trades)), starting if starting > 0 else cfg.starting_balance)
+    else:
+        result = compute_metrics(trades, cfg.starting_balance)
+    result["source"] = source
+    return result
 
 
 @api.get("/trades/equity-curve")
 async def equity_curve(mode: Optional[str] = None, user: UserPublic = Depends(get_current_user)):
     cfg = await _get_config()
-    q = {}
-    if mode:
-        q["mode"] = mode
-    docs = await trades_col.find(q, {"_id": 0}).sort("closed_at", 1).to_list(10000)
-    eq = cfg.starting_balance
-    curve = [{"ts": None, "equity": eq}]
-    for t in docs:
+    trades, source = await _resolve_trades(mode, cfg)
+    if source == "mt5":
+        account = await mt5_connector.get_account_info()
+        balance = account["balance"] if account else 0.0
+        eq = balance - sum(t.get("pnl", 0.0) for t in trades)
+        ordered = sorted(trades, key=lambda t: str(t.get("closed_at")))
+    else:
+        eq = cfg.starting_balance
+        ordered = sorted(trades, key=lambda t: str(t.get("closed_at")))
+    curve = [{"ts": None, "equity": round(eq, 2)}]
+    for t in ordered:
         eq += t.get("pnl", 0.0)
         ts = t.get("closed_at")
         if isinstance(ts, datetime):
@@ -853,43 +893,42 @@ async def websocket_endpoint(ws: WebSocket, token: str):
 async def _send_snapshot(ws: WebSocket):
     """Send a full snapshot to a single client."""
     try:
-        cfg = await _get_config()
-        state = await _get_state()
-        prices = {s: market.get_price(s) for s in cfg.symbols}
-        # Open positions with current price + unrealized PnL
-        positions = await positions_col.find({"status": "OPEN"}, {"_id": 0}).to_list(50)
-        for p in positions:
-            price = market.get_price(p["symbol"])
-            p["current_price"] = price
-            if price is not None:
-                if p["side"] == "BUY":
-                    p["unrealized_pnl"] = round((price - p["entry_price"]) * p["quantity"], 2)
-                else:
-                    p["unrealized_pnl"] = round((p["entry_price"] - price) * p["quantity"], 2)
-            else:
-                p["unrealized_pnl"] = 0.0
-            if isinstance(p.get("opened_at"), datetime):
-                p["opened_at"] = p["opened_at"].isoformat()
-
-        mt5_status_dict = mt5_connector.status()
-        mt5_account = await mt5_connector.get_account_info() if mt5_connector.connected else None
-
         payload = {
             "type": "snapshot",
             "ts": datetime.now(timezone.utc).isoformat(),
-            "data": {
-                "state": state.model_dump(),
-                "config_mode": cfg.mode,
-                "config_enabled": cfg.enabled,
-                "prices": prices,
-                "positions": positions,
-                "mt5_status": mt5_status_dict,
-                "mt5_account": mt5_account,
-            },
+            "data": await _build_snapshot_data(),
         }
         await ws.send_text(json.dumps(payload, default=str))
     except Exception as e:
         logger.exception("send_snapshot error: %s", e)
+
+
+async def _build_snapshot_data() -> dict:
+    """Single source of truth for the live snapshot (WS + REST polling).
+
+    In real mode with MT5 connected: balance/equity/margin/positions come
+    from the real MT5 account. Otherwise: internal simulator.
+    """
+    cfg = await _get_config()
+    state = await _get_state()
+    prices = {s: market.get_price(s) for s in cfg.symbols}
+    resolved_state = await live_account.resolve_state(cfg, state)
+    if live_account.is_live(cfg):
+        positions = await live_account.live_positions()
+    else:
+        positions = await _sim_open_positions(cfg.mode)
+    resolved_state["open_positions"] = len(positions)
+    mt5_status_dict = mt5_connector.status()
+    mt5_account = await mt5_connector.get_account_info() if mt5_connector.connected else None
+    return {
+        "state": resolved_state,
+        "config_mode": cfg.mode,
+        "config_enabled": cfg.enabled,
+        "prices": prices,
+        "positions": positions,
+        "mt5_status": mt5_status_dict,
+        "mt5_account": mt5_account,
+    }
 
 
 # --- Background WS broadcast loop ---
@@ -900,33 +939,7 @@ async def _ws_broadcast_loop():
         if not ws_hub.clients:
             continue
         try:
-            cfg = await _get_config()
-            state = await _get_state()
-            prices = {s: market.get_price(s) for s in cfg.symbols}
-            positions = await positions_col.find({"status": "OPEN"}, {"_id": 0}).to_list(50)
-            for p in positions:
-                price = market.get_price(p["symbol"])
-                p["current_price"] = price
-                if price is not None:
-                    if p["side"] == "BUY":
-                        p["unrealized_pnl"] = round((price - p["entry_price"]) * p["quantity"], 2)
-                    else:
-                        p["unrealized_pnl"] = round((p["entry_price"] - price) * p["quantity"], 2)
-                else:
-                    p["unrealized_pnl"] = 0.0
-                if isinstance(p.get("opened_at"), datetime):
-                    p["opened_at"] = p["opened_at"].isoformat()
-            mt5_status_dict = mt5_connector.status()
-            mt5_account = await mt5_connector.get_account_info() if mt5_connector.connected else None
-            await ws_hub.broadcast("snapshot", {
-                "state": state.model_dump(),
-                "config_mode": cfg.mode,
-                "config_enabled": cfg.enabled,
-                "prices": prices,
-                "positions": positions,
-                "mt5_status": mt5_status_dict,
-                "mt5_account": mt5_account,
-            })
+            await ws_hub.broadcast("snapshot", await _build_snapshot_data())
         except Exception as e:
             logger.exception("ws_broadcast error: %s", e)
 
