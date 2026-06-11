@@ -26,7 +26,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 from database import (
     users_col, trades_col, positions_col, audit_col, costs_col,
-    config_col, state_col, ensure_indexes,
+    config_col, state_col, signals_col, ensure_indexes,
 )
 from models import (
     UserRegister, UserLogin, UserPublic, Token,
@@ -336,6 +336,7 @@ class ConfigFlagsIn(BaseModel):
     paper_validation_min_trades: Optional[int] = None
     paper_validation_min_winrate: Optional[float] = None
     live_mt5_trading_enabled: Optional[bool] = None
+    min_confidence_score: Optional[int] = None
 
 
 @api.post("/bot/config-flags", response_model=BotConfig)
@@ -357,7 +358,100 @@ async def strategies_list(user: UserPublic = Depends(get_current_user)):
     return [{"id": k, "name": v["name"], "description": v["description"]} for k, v in STRATEGIES.items()]
 
 
-# --- Positions & trades ---
+# --- Marchés: sélection des instruments autorisés au trading ---
+class SymbolSelectionIn(BaseModel):
+    symbols: List[str]
+
+
+class SingleModeIn(BaseModel):
+    enabled: bool
+    symbol: Optional[str] = None
+
+
+@api.get("/market/symbols")
+async def market_symbols(user: UserPublic = Depends(get_current_user)):
+    """Catalogue des instruments (MT5 si connecté, sinon simulateur) + sélection actuelle."""
+    cfg = await _get_config()
+    if mt5_connector.connected:
+        catalog = await mt5_connector.list_symbols()
+    else:
+        from services.paper_engine import SYMBOL_SPECS
+        from services.mt5_broker import categorize_symbol
+        catalog = [{
+            "name": s, "description": f"{s} (simulateur)", "path": "",
+            "category": categorize_symbol("", s), "digits": spec["decimals"],
+            "spread_points": 0, "visible": True,
+        } for s, spec in SYMBOL_SPECS.items()]
+    enabled = set(cfg.symbols or [])
+    for c in catalog:
+        c["enabled"] = c["name"] in enabled
+    return {
+        "symbols": catalog,
+        "selected": cfg.symbols,
+        "single_symbol_mode": cfg.single_symbol_mode,
+        "single_symbol": cfg.single_symbol,
+        "min_confidence_score": cfg.min_confidence_score,
+        "source": "mt5" if mt5_connector.connected else "sim",
+    }
+
+
+@api.post("/market/symbols", response_model=BotConfig)
+async def update_market_symbols(req: SymbolSelectionIn, user: UserPublic = Depends(get_current_user)):
+    """Met à jour la liste des marchés autorisés (effet immédiat, sans redémarrage)."""
+    symbols = [s.strip().upper() for s in req.symbols if s and s.strip()]
+    symbols = list(dict.fromkeys(symbols))  # dedupe, keep order
+    if not symbols:
+        raise HTTPException(400, "Sélectionnez au moins un marché")
+    if len(symbols) > 10:
+        raise HTTPException(400, "Maximum 10 marchés simultanés (charge et risque maîtrisés)")
+    cfg = await _get_config()
+    cfg.symbols = symbols
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="symbols_updated",
+                                        details={"user": user.email, "symbols": symbols}).model_dump())
+    return cfg
+
+
+@api.post("/market/single-mode", response_model=BotConfig)
+async def update_single_mode(req: SingleModeIn, user: UserPublic = Depends(get_current_user)):
+    """Mode marché unique: ne trader qu'un seul actif (changeable à chaud)."""
+    cfg = await _get_config()
+    cfg.single_symbol_mode = req.enabled
+    if req.symbol:
+        cfg.single_symbol = req.symbol.strip().upper()
+    if cfg.single_symbol_mode and not cfg.single_symbol:
+        raise HTTPException(400, "Choisissez l'actif du mode marché unique")
+    cfg.updated_at = utc_now()
+    await config_col.update_one({"id": cfg.id}, {"$set": cfg.model_dump()}, upsert=True)
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="single_mode_updated",
+                                        details={"user": user.email, "enabled": req.enabled,
+                                                 "symbol": cfg.single_symbol}).model_dump())
+    return cfg
+
+
+# --- Signaux du moteur de décision (score + explications) ---
+@api.get("/signals/current")
+async def signals_current(user: UserPublic = Depends(get_current_user)):
+    """Dernière évaluation en mémoire pour chaque marché surveillé."""
+    cfg = await _get_config()
+    from services.decision_engine import latest_evals, effective_symbols
+    symbols = effective_symbols(cfg)
+    return {
+        "symbols": symbols,
+        "evaluations": [latest_evals[s] for s in symbols if s in latest_evals],
+        "min_confidence_score": cfg.min_confidence_score,
+    }
+
+
+@api.get("/signals/recent")
+async def signals_recent(limit: int = 30, user: UserPublic = Depends(get_current_user)):
+    """Historique des signaux persistés (exécutions + presque-signaux)."""
+    docs = await signals_col.find({}, {"_id": 0}).sort("ts", -1).to_list(min(limit, 100))
+    return docs
+
+
+
 async def _sim_open_positions(mode: str):
     """Internal simulator positions for the given mode, enriched with live price."""
     docs = await positions_col.find({"status": "OPEN", "mode": mode}, {"_id": 0}).sort("opened_at", -1).to_list(200)

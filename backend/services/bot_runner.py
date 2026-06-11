@@ -10,17 +10,13 @@ from database import (
     audit_col,
     config_col,
     state_col,
+    signals_col,
 )
 from models import BotConfig, BotState, Position, Trade, AuditLog, utc_now
 from services.paper_engine import market, SYMBOL_SPECS
-from services.strategies import STRATEGIES, detect_volatility
 from services.mt5_broker import mt5_connector
-from services.market_regime import (
-    detect_regime,
-    filter_strategies,
-    risk_multiplier,
-    regime_store,
-)
+from services.market_regime import regime_store, risk_multiplier
+from services import decision_engine
 
 logger = logging.getLogger("bot_runner")
 
@@ -144,8 +140,10 @@ class BotRunner:
             open_symbols = None
             open_count_base = None
 
-        # Run strategies per symbol (state is mutated in-place by _open_position)
-        for symbol in cfg.symbols:
+        # Multi-factor decision engine on USER-SELECTED markets only.
+        # The bot NEVER analyzes or trades a symbol the user hasn't enabled.
+        symbols = decision_engine.effective_symbols(cfg)
+        for symbol in symbols:
             if live:
                 if open_count_base is not None and open_count_base >= cfg.risk.max_open_positions:
                     break
@@ -159,68 +157,45 @@ class BotRunner:
                 if existing:
                     continue
 
-            closes = market.get_closes(symbol, 200)
-            if len(closes) < 30:
+            # Throttle: one full evaluation per symbol per minute
+            if not decision_engine.should_evaluate(symbol):
                 continue
 
-            # Detect regime + cache for UI (always, even if adaptive disabled)
-            regime_info = detect_regime(closes)
-            regime_store.update(symbol, regime_info)
-            regime_label = regime_info.get("regime", "UNKNOWN")
+            evaluation = await decision_engine.evaluate_symbol(symbol, cfg)
 
-            # Volatility filter (legacy hard pause)
-            vol = detect_volatility(closes)
-            # Pause on extreme volatility (relative > 0.05 = 5%)
-            if cfg.risk.volatility_pause and vol > 0.05:
-                await self._log("RISK", "volatility_pause", {"symbol": symbol, "vol": vol})
+            # SAFETY: never execute a live trade on simulated data
+            if live and evaluation.get("source") != "mt5":
                 continue
 
-            # Adaptive strategy filtering
-            enabled = cfg.strategy.enabled or ["multi"]
-            if cfg.adaptive_enabled:
-                enabled = filter_strategies(regime_label, enabled)
+            # Persist interesting evaluations (executions + near misses)
+            if evaluation["decision"] == "EXECUTE" or (
+                evaluation.get("side") and evaluation["score"] >= evaluation["threshold"] - 15
+            ):
+                await signals_col.insert_one({**evaluation})
 
-            # Aggregate signals from enabled strategies
-            signals = []
-            for strat_id in enabled:
-                strat = STRATEGIES.get(strat_id)
-                if not strat:
-                    continue
-                sig, reason = strat["fn"](closes, cfg.strategy)
-                if sig:
-                    signals.append((strat_id, sig, reason))
-
-            if not signals:
+            if evaluation["decision"] != "EXECUTE":
                 continue
 
-            # Vote
-            buy_votes = sum(1 for _, s, _ in signals if s == "BUY")
-            sell_votes = sum(1 for _, s, _ in signals if s == "SELL")
-            if buy_votes == 0 and sell_votes == 0:
-                continue
-            if buy_votes == sell_votes:
-                continue
-            side = "BUY" if buy_votes > sell_votes else "SELL"
-            chosen = [(sid, r) for sid, s, r in signals if s == side]
-            strat_used = ",".join(sid for sid, _ in chosen)
-            reason = " | ".join(r for _, r in chosen)
-            # Annotate reason with regime
-            if cfg.adaptive_enabled:
-                reason = f"[{regime_label}] {reason}"
-
-            # Adaptive risk multiplier (scales position size)
+            side = evaluation["side"]
+            regime_label = evaluation.get("regime", "UNKNOWN")
+            ok_factors = "; ".join(f"{f['name']}: {f['detail']}" for f in evaluation["factors"] if f["ok"])
+            reason = f"Score {evaluation['score']}/100 [{regime_label}] {ok_factors}"
             adaptive_mult = risk_multiplier(regime_label) if cfg.adaptive_enabled else 1.0
 
             # Open position (mutates state in-place: balance fee, trades_today)
-            opened = await self._open_position(cfg, state, symbol, side, strat_used, reason, adaptive_mult)
+            # ATR-based SL only on REAL MT5 candles (sim ticks give micro-ATR)
+            opened = await self._open_position(
+                cfg, state, symbol, side, "engine", reason, adaptive_mult,
+                atr_value=evaluation.get("atr") if evaluation.get("source") == "mt5" else None,
+            )
             if opened and live and open_count_base is not None:
                 open_count_base += 1
 
         await self._update_state(state)
 
-    async def _open_position(self, cfg: BotConfig, state: BotState, symbol: str, side: str, strategy: str, reason: str, risk_mult: float = 1.0) -> bool:
+    async def _open_position(self, cfg: BotConfig, state: BotState, symbol: str, side: str, strategy: str, reason: str, risk_mult: float = 1.0, atr_value: Optional[float] = None) -> bool:
         price = market.get_price(symbol)
-        if price is None:
+        if price is None and atr_value is None:
             return False
 
         # Determine if we route to MT5 live trading or simulator
@@ -240,13 +215,6 @@ class BotRunner:
                 sizing_balance = account["balance"]
         allocated = sizing_balance * (cfg.risk.capital_allocation_pct / 100.0)
         risk_amount = allocated * (cfg.risk.risk_per_trade_pct / 100.0) * float(risk_mult)
-        # Stop loss distance as % of price
-        sl_distance = price * (cfg.risk.stop_loss_pct / 100.0)
-        if sl_distance <= 0:
-            return False
-        quantity = risk_amount / sl_distance
-        if quantity <= 0:
-            return False
 
         if live_mt5:
             # Abnormal spread guard: skip entry when spread is too wide
@@ -254,24 +222,42 @@ class BotRunner:
             if spread_pct is not None and spread_pct > cfg.risk.max_spread_pct:
                 await self._log("RISK", "abnormal_spread_skip", {"symbol": symbol, "spread_pct": round(spread_pct, 4)})
                 return False
-            # Pull current MT5 price for accurate SL/TP
+            # Current MT5 price for accurate SL/TP
             mt5_tick = await mt5_connector.get_price(symbol)
-            if mt5_tick:
-                ref_price = mt5_tick["ask"] if side == "BUY" else mt5_tick["bid"]
+            if not mt5_tick:
+                await self._log("ERROR", "mt5_no_tick", {"symbol": symbol})
+                return False
+            ref_price = mt5_tick["ask"] if side == "BUY" else mt5_tick["bid"]
+            # SL distance: ATR-based (adapté à chaque actif) avec plancher de
+            # sécurité à 0.05% du prix, fallback % prix configuré
+            if atr_value and atr_value > 0:
+                sl_distance = max(1.5 * atr_value, ref_price * 0.0005)
             else:
-                ref_price = price
+                sl_distance = ref_price * (cfg.risk.stop_loss_pct / 100.0)
+            if sl_distance <= 0:
+                return False
             if side == "BUY":
                 sl = round(ref_price - sl_distance, 6)
                 tp = round(ref_price + (sl_distance * cfg.risk.risk_reward_ratio), 6)
             else:
                 sl = round(ref_price + sl_distance, 6)
                 tp = round(ref_price - (sl_distance * cfg.risk.risk_reward_ratio), 6)
-            # Volume in lots (MT5) — convert quantity heuristically (cap to broker min)
-            volume_lots = max(0.01, round(quantity / 100000, 2))
+            # Volume in lots, computed from the broker's REAL symbol specs
+            info = await mt5_connector.get_symbol_info(symbol)
+            if info and info.get("contract_size"):
+                contract = info["contract_size"]
+                vol_min = info.get("volume_min") or 0.01
+                vol_step = info.get("volume_step") or 0.01
+                vol_max = min(info.get("volume_max") or 1.0, 1.0)  # hard cap 1 lot (sécurité)
+                lots = risk_amount / (sl_distance * contract)
+                lots = max(vol_min, int(lots / vol_step) * vol_step)
+                volume_lots = round(min(lots, vol_max), 2)
+            else:
+                volume_lots = 0.01  # fallback ultra-conservateur
             result = await mt5_connector.place_order(symbol, side, volume_lots, sl, tp, comment=f"Bot {strategy}")
             if not result.get("ok"):
                 await self._log("ERROR", "mt5_order_failed", {"symbol": symbol, "side": side, "error": result.get("error")})
-                return
+                return False
             entry = result.get("price", ref_price)
             # Record locally as well for tracking parity
             pos = Position(
@@ -288,9 +274,21 @@ class BotRunner:
                 "entry": entry, "volume_lots": volume_lots, "sl": sl, "tp": tp,
                 "strategy": strategy, "reason": reason,
             })
-            return
+            return True
 
         # ---- Simulator path (default) ----
+        if price is None:
+            return False
+        # SL distance: ATR-based when available, else % of price
+        if atr_value and atr_value > 0:
+            sl_distance = 1.5 * atr_value
+        else:
+            sl_distance = price * (cfg.risk.stop_loss_pct / 100.0)
+        if sl_distance <= 0:
+            return False
+        quantity = risk_amount / sl_distance
+        if quantity <= 0:
+            return False
         fill = market.execute_order(symbol, side, price)
         entry = fill["fill_price"]
         if side == "BUY":
@@ -315,6 +313,7 @@ class BotRunner:
             "qty": pos.quantity, "sl": sl, "tp": tp, "strategy": strategy,
             "reason": reason, "fee": fill["fee"], "mode": cfg.mode,
         })
+        return True
 
     async def _manage_positions(self, cfg: BotConfig, state: BotState):
         """Manage open positions.

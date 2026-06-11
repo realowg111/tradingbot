@@ -12,6 +12,8 @@ import { useAuth } from "@/src/context/AuthContext";
 type Item = { id: string; icon: keyof typeof Ionicons.glyphMap; label: string; description: string; href: string; testId: string };
 
 const items: Item[] = [
+  { id: "markets", icon: "globe-outline", label: "Marchés autorisés", description: "Choisir les actifs tradés (Forex, crypto, indices…) + mode marché unique", href: "/markets", testId: "more-markets" },
+  { id: "signals", icon: "analytics-outline", label: "Signaux & Scores", description: "Score de confiance multi-facteurs et raisons d'entrée/rejet", href: "/signals", testId: "more-signals" },
   { id: "journal", icon: "sparkles-outline", label: "Journal AI", description: "Analyse IA Claude 4.5 de l'historique de trades", href: "/journal", testId: "more-journal" },
   { id: "regime", icon: "pulse-outline", label: "Régime de marché", description: "Détection adaptative trend/range/volatile + ajustement auto", href: "/regime", testId: "more-regime" },
   { id: "risk", icon: "shield-checkmark-outline", label: "Gestion du risque", description: "SL, TP, drawdown, sizing, ratio R/R, validation, live MT5", href: "/risk", testId: "more-risk" },

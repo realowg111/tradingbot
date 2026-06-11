@@ -20,6 +20,7 @@ costs_col = db["costs"]
 config_col = db["bot_config"]
 state_col = db["bot_state"]
 candles_col = db["candles"]
+signals_col = db["signals"]
 
 
 async def ensure_indexes():
@@ -29,3 +30,5 @@ async def ensure_indexes():
     await audit_col.create_index([("ts", -1)])
     await costs_col.create_index([("date", -1)])
     await candles_col.create_index([("symbol", 1), ("ts", -1)])
+    await signals_col.create_index([("ts", -1)])
+    await signals_col.create_index([("symbol", 1), ("ts", -1)])

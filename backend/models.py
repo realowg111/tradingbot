@@ -111,6 +111,11 @@ class BotConfig(BaseModel):
     enabled: bool = False
     starting_balance: float = 10000.0
     symbols: List[str] = Field(default_factory=lambda: ["EURUSD", "GBPUSD", "XAUUSD", "US100", "BTCUSD"])
+    # Marchés: mode "marché unique" (un seul actif tradé, changeable à chaud)
+    single_symbol_mode: bool = False
+    single_symbol: str = "EURUSD"
+    # Moteur de décision: score de confiance minimum (0-100) pour exécuter
+    min_confidence_score: int = 70
     risk: RiskConfig = Field(default_factory=RiskConfig)
     strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     # Paper validation gates (fully configurable - disabled by default)

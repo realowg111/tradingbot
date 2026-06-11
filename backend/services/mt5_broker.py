@@ -21,6 +21,50 @@ import httpx
 
 logger = logging.getLogger("mt5_broker")
 
+
+_FX_CURRENCIES = {"EUR", "USD", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "SGD", "NOK", "SEK", "DKK", "PLN", "ZAR", "MXN", "TRY", "CNH", "HKD"}
+
+
+def categorize_symbol(path: str, name: str) -> str:
+    """Infer instrument category from MT5 symbol path/name."""
+    p = (path or "").lower()
+    n = (name or "").upper()
+    if "crypto" in p or n.startswith(("BTC", "ETH", "XRP", "LTC", "SOL", "ADA", "DOG", "BNB")) or "USDT" in n:
+        return "crypto"
+    if "metal" in p or n.startswith(("XAU", "XAG", "XPT", "XPD")):
+        return "metaux"
+    if "indice" in p or "index" in p or "indices" in p or "cash" in p or n in ("US30", "US100", "US500", "DE40", "DE30", "FR40", "UK100", "JP225", "AUS200", "HK50", "EU50", "ES35", "NAS100", "SPX500", "DJ30"):
+        return "indices"
+    if "energ" in p or "oil" in p or n.startswith(("WTI", "BRENT", "XNG", "XBR", "XTI", "UKOIL", "USOIL", "NGAS")):
+        return "energie"
+    if "stock" in p or "share" in p or "equit" in p or "action" in p:
+        return "actions"
+    if "forex" in p or (len(n) >= 6 and n[:3] in _FX_CURRENCIES and n[3:6] in _FX_CURRENCIES):
+        return "forex"
+    return "autres"
+
+
+_FX_CURRENCIES = {"EUR", "USD", "GBP", "JPY", "AUD", "NZD", "CAD", "CHF", "SGD", "NOK", "SEK", "DKK", "PLN", "ZAR", "MXN", "TRY", "CNH", "HKD"}
+
+
+def categorize_symbol(path: str, name: str) -> str:
+    """Infer instrument category from MT5 symbol path/name."""
+    p = (path or "").lower()
+    n = (name or "").upper()
+    if "crypto" in p or n.startswith(("BTC", "ETH", "XRP", "LTC", "SOL", "ADA", "DOG", "BNB")) or "USDT" in n:
+        return "crypto"
+    if "metal" in p or n.startswith(("XAU", "XAG", "XPT", "XPD")):
+        return "metaux"
+    if "indice" in p or "index" in p or "indices" in p or "cash" in p or n in ("US30", "US100", "US500", "DE40", "DE30", "FR40", "UK100", "JP225", "AUS200", "HK50", "EU50", "ES35", "NAS100", "SPX500", "DJ30"):
+        return "indices"
+    if "energ" in p or "oil" in p or n.startswith(("WTI", "BRENT", "XNG", "XBR", "XTI", "UKOIL", "USOIL", "NGAS")):
+        return "energie"
+    if "stock" in p or "share" in p or "equit" in p or "action" in p:
+        return "actions"
+    if "forex" in p or (len(n) >= 6 and n[:3] in _FX_CURRENCIES and n[3:6] in _FX_CURRENCIES):
+        return "forex"
+    return "autres"
+
 # Try native MT5 lib (Windows only) -----------------------------
 try:
     import MetaTrader5 as mt5  # type: ignore
@@ -377,6 +421,92 @@ class MT5Connector:
         if mid <= 0:
             return None
         return ((tick["ask"] - tick["bid"]) / mid) * 100
+
+    async def get_candles(self, symbol: str, timeframe: str = "M15", count: int = 200) -> List[Dict[str, Any]]:
+        """Real OHLC candles from MT5. Returns [] if unavailable."""
+        if not (self.connected and self.mode == "native" and HAS_MT5_NATIVE):
+            return []
+        try:
+            tf_map = {
+                "M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5, "M15": mt5.TIMEFRAME_M15,
+                "M30": mt5.TIMEFRAME_M30, "H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4,
+                "D1": mt5.TIMEFRAME_D1,
+            }
+            tf = tf_map.get(timeframe, mt5.TIMEFRAME_M15)
+
+            def _fetch():
+                mt5.symbol_select(symbol, True)
+                return mt5.copy_rates_from_pos(symbol, tf, 0, count)
+
+            rates = await asyncio.to_thread(_fetch)
+            if rates is None or len(rates) == 0:
+                return []
+            return [{
+                "time": datetime.fromtimestamp(int(r["time"]), tz=timezone.utc).isoformat(),
+                "open": float(r["open"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "close": float(r["close"]),
+                "volume": int(r["tick_volume"]),
+            } for r in rates]
+        except Exception as e:
+            logger.warning("get_candles error %s: %s", symbol, e)
+            return []
+
+    async def get_symbol_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Trading specs for a symbol (contract size, lot constraints, digits)."""
+        if not (self.connected and self.mode == "native" and HAS_MT5_NATIVE):
+            return None
+        try:
+            def _fetch():
+                mt5.symbol_select(symbol, True)
+                return mt5.symbol_info(symbol)
+
+            info = await asyncio.to_thread(_fetch)
+            if info is None:
+                return None
+            return {
+                "name": info.name,
+                "description": info.description,
+                "path": info.path,
+                "digits": info.digits,
+                "point": info.point,
+                "contract_size": info.trade_contract_size,
+                "volume_min": info.volume_min,
+                "volume_step": info.volume_step,
+                "volume_max": info.volume_max,
+                "currency_profit": info.currency_profit,
+                "trade_allowed": info.trade_mode != 0,
+            }
+        except Exception as e:
+            logger.warning("get_symbol_info error %s: %s", symbol, e)
+            return None
+
+    async def list_symbols(self) -> List[Dict[str, Any]]:
+        """All tradable symbols of the broker with inferred category."""
+        if not (self.connected and self.mode == "native" and HAS_MT5_NATIVE):
+            return []
+        try:
+            symbols = await asyncio.to_thread(mt5.symbols_get)
+            if not symbols:
+                return []
+            out = []
+            for s in symbols:
+                if s.trade_mode == 0:  # not tradable
+                    continue
+                out.append({
+                    "name": s.name,
+                    "description": s.description,
+                    "path": s.path,
+                    "category": categorize_symbol(s.path, s.name),
+                    "digits": s.digits,
+                    "spread_points": s.spread,
+                    "visible": s.visible,
+                })
+            return out
+        except Exception as e:
+            logger.warning("list_symbols error: %s", e)
+            return []
 
     # ----- Trading: place / close orders on MT5 -----
     async def place_order(self, symbol: str, side: str, volume: float, sl: float, tp: float, comment: str = "TradingBot") -> Dict[str, Any]:
