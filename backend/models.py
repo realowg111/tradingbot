@@ -147,6 +147,10 @@ class BotState(BaseModel):
     week_start_equity: float = 0.0
     last_weekly_reset: Optional[datetime] = None
     peak_equity: float = 0.0
+    # Références LIVE (compte MT5 réel) — séparées des références simulateur
+    daily_start_live: float = 0.0
+    week_start_equity_live: float = 0.0
+    peak_equity_live: float = 0.0
     paused_reason: Optional[str] = None
     paper_start: datetime = Field(default_factory=utc_now)
     real_unlocked: bool = False

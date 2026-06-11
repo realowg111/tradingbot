@@ -91,11 +91,20 @@ class BotRunner:
                 await self._update_state(state)
                 return
 
-        # Reference equity for risk guards: MT5 equity in live mode, sim otherwise
-        ref_equity = live_equity if (live and live_equity is not None) else state.equity
+        # Reference equity & baselines: LIVE refs in real mode, sim refs otherwise
+        if live and live_equity is not None:
+            ref_equity = live_equity
+            daily_start = state.daily_start_live
+            week_start = state.week_start_equity_live
+            peak = state.peak_equity_live
+        else:
+            ref_equity = state.equity
+            daily_start = state.daily_start_balance
+            week_start = state.week_start_equity
+            peak = state.peak_equity
 
         # Daily drawdown check
-        dd_pct = ((state.daily_start_balance - ref_equity) / state.daily_start_balance) * 100 if state.daily_start_balance > 0 else 0
+        dd_pct = ((daily_start - ref_equity) / daily_start) * 100 if daily_start > 0 else 0
         if dd_pct >= cfg.risk.daily_drawdown_limit_pct:
             if state.paused_reason != "daily_drawdown":
                 await self._log("RISK", "daily_drawdown_hit", {"dd_pct": round(dd_pct, 2)})
@@ -104,8 +113,8 @@ class BotRunner:
             return
 
         # Weekly loss limit
-        if state.week_start_equity > 0:
-            weekly_loss_pct = ((state.week_start_equity - ref_equity) / state.week_start_equity) * 100
+        if week_start > 0:
+            weekly_loss_pct = ((week_start - ref_equity) / week_start) * 100
             if weekly_loss_pct >= cfg.risk.weekly_loss_limit_pct:
                 if state.paused_reason != "weekly_loss_limit":
                     await self._log("RISK", "weekly_loss_limit_hit", {"loss_pct": round(weekly_loss_pct, 2)})
@@ -114,8 +123,8 @@ class BotRunner:
                 return
 
         # Max total drawdown vs peak equity
-        if state.peak_equity > 0:
-            total_dd_pct = ((state.peak_equity - ref_equity) / state.peak_equity) * 100
+        if peak > 0:
+            total_dd_pct = ((peak - ref_equity) / peak) * 100
             if total_dd_pct >= cfg.risk.max_total_drawdown_pct:
                 if state.paused_reason != "max_drawdown":
                     await self._log("RISK", "max_drawdown_hit", {"dd_pct": round(total_dd_pct, 2)})
@@ -476,17 +485,28 @@ class BotRunner:
 
     async def _daily_reset(self, state: BotState, live_equity: Optional[float] = None):
         now = datetime.now(timezone.utc)
-        ref = live_equity if live_equity is not None else state.balance
+
+        # Références LIVE (compte MT5 réel): initialisées au premier tick connecté
+        if live_equity is not None:
+            if state.daily_start_live <= 0:
+                state.daily_start_live = live_equity
+            if state.week_start_equity_live <= 0:
+                state.week_start_equity_live = live_equity
+            if live_equity > state.peak_equity_live:
+                state.peak_equity_live = live_equity
+
         last = state.last_daily_reset if isinstance(state.last_daily_reset, datetime) else datetime.fromisoformat(str(state.last_daily_reset))
         if last.tzinfo is None:
             last = last.replace(tzinfo=timezone.utc)
         if now.date() > last.date():
-            state.daily_start_balance = ref
+            state.daily_start_balance = state.balance
+            if live_equity is not None:
+                state.daily_start_live = live_equity
             state.daily_pnl = 0.0
             state.trades_today = 0
             state.last_daily_reset = now
             state.paused_reason = None
-            await self._log("SYSTEM", "daily_reset", {"daily_start_balance": ref})
+            await self._log("SYSTEM", "daily_reset", {"sim": state.balance, "live": live_equity})
 
         # Weekly reset (ISO week change) for the weekly loss limit
         last_week = state.last_weekly_reset
@@ -495,14 +515,15 @@ class BotRunner:
         if last_week and last_week.tzinfo is None:
             last_week = last_week.replace(tzinfo=timezone.utc)
         if not last_week or now.isocalendar()[:2] != last_week.isocalendar()[:2]:
-            state.week_start_equity = ref
+            state.week_start_equity = state.balance
+            if live_equity is not None:
+                state.week_start_equity_live = live_equity
             state.last_weekly_reset = now
-            await self._log("SYSTEM", "weekly_reset", {"week_start_equity": ref})
+            await self._log("SYSTEM", "weekly_reset", {"sim": state.balance, "live": live_equity})
 
-        # Peak equity tracking for max total drawdown
-        current_eq = live_equity if live_equity is not None else state.equity
-        if current_eq > state.peak_equity:
-            state.peak_equity = current_eq
+        # Peak equity simulateur (le peak live est géré plus haut)
+        if state.equity > state.peak_equity:
+            state.peak_equity = state.equity
 
     async def _get_config(self) -> BotConfig:
         doc = await config_col.find_one({}, {"_id": 0})
