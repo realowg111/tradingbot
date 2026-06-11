@@ -69,6 +69,8 @@ async def resolve_state(cfg, state) -> Dict[str, Any]:
             _daily_cache["realized"] = realized_today
         data["daily_pnl"] = round(realized_today + floating, 2)
         data["realized_pnl"] = round(realized_today, 2)
+        # Accurate daily reference: balance at start of day = balance - realized today
+        data["daily_start_balance"] = round(account["balance"] - realized_today, 2)
     except Exception as e:
         logger.warning("daily pnl mt5 error: %s", e)
     return data

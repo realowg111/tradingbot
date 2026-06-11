@@ -1,57 +1,48 @@
-# Trading Bot — PRD (v6)
+# Trading Bot — PRD (v7)
 
-## Itération v6 (current) — Déblocage login + reconnexion VPS + fix IPC timeout + suppression verrous mode réel
-- **Suppression des verrous de passage en réel** (demande utilisateur explicite) :
-  - VPS : `paper_validation_enabled=false` appliqué à distance via POST /api/bot/config-flags.
-  - `server.py` : check de la phrase "JE CONFIRME LE PASSAGE EN REEL" supprimé (la phrase reste acceptée/ignorée).
-  - `models.py` : `paper_validation_enabled` default → False.
-  - `bot.tsx` : modal + saisie de phrase supprimés ; bouton "Réel" bascule en 1 tap (la phrase est envoyée automatiquement en arrière-plan pour compatibilité avec le backend VPS non mis à jour) ; hint texte mis à jour.
-  - Testé e2e sur le VPS : passage en RÉEL en 1 clic, badge "RÉEL DÉBLOQUÉ" ✅.
-- **État VPS après bascule** : mode=real, real_unlocked=true, bot DÉSACTIVÉ (sécurité post-switch), `live_mt5_trading_enabled=false` → pour trader réellement sur MT5 : activer le toggle dans l'écran Risque + bouton ON.
-- **Réinitialisation mot de passe admin VPS** : script infaillible `scripts/vps_windows/reset_password.ps1` (Python encodé Base64). Credentials : `admin@trading.bot` / `Trading2025!` (VPS + sandbox).
-- **Fix critique 1** : le fork avait réinitialisé `EXPO_PUBLIC_BACKEND_URL` sur le backend sandbox Linux → cause du "identifiants invalides" ET du bandeau "backend Linux". Restauré vers le tunnel : `https://cult-spa-projectors-exceptional.trycloudflare.com`.
-- **Fix critique 2 — IPC timeout (-10005)** : le chemin terminal sauvegardé avait été perdu (POST /mt5/credentials écrasait le path) et l'autodétection choisissait le MAUVAIS terminal (`C:\Program Files\MetaTrader 5` au lieu de `C:\Program Files\RoboForex MT5 Terminal`). Réparé à distance via API (credentials corrigés + connect) → **MT5 CONNECTÉ en natif (compte 68323992, RoboForex-Pro, 500 USD, levier 1:1000)**.
-- **Correctifs code (anti-récurrence, testés)** :
-  - `models.py` : validators trim espaces/guillemets sur login/server/broker/path (MT5CredentialsIn + MT5PathPatch).
-  - `server.py` : POST /mt5/credentials préserve désormais le path existant si non fourni (comme le password).
-  - `mt5_broker.py` : message FR actionnable pour l'erreur -10005 IPC timeout ; la boucle de reconnexion réutilise le terminal_path.
-  - `mt5.tsx` : le polling 3s n'écrase plus les champs du formulaire (préremplissage unique) ; trim des champs avant envoi.
-- ⚠️ Le VPS tourne encore l'ANCIEN code (fonctionne car la DB est corrigée). Les correctifs s'appliqueront au prochain update VPS (Save to GitHub + git pull). Note : `auto_update.ps1` utilise encore `Restart-Service TradingBotBackend` — obsolète depuis la migration en Tâche planifiée, à mettre à jour.
-- ⚠️ Tunnel "quick" éphémère : si cloudflared redémarre, l'URL change → mettre à jour `EXPO_PUBLIC_BACKEND_URL`.
-- État bot VPS : actif, mode DEMO/paper (10 000 USD virtuel), `real_unlocked: false`. Prochaine étape : passage en live / micro-trade test.
-
-## Itération v5
-- **Détection dynamique du régime de marché** + **adaptation automatique** : nouveau module `services/market_regime.py`.
-  - 4 régimes détectés par symbole (TREND_UP / TREND_DOWN / RANGE / VOLATILE) à partir de la stddev relative, du slope EMA et du range.
-  - Filtrage adaptatif des stratégies : TREND → EMA_MACD+Multi, RANGE → Bollinger+RSI, VOLATILE → Multi (consensus).
-  - Sizing adaptatif : risk_per_trade multiplié par 0.5 (VOLATILE), 0.75 (RANGE), 1.0 (TREND).
-  - Cache in-memory `regime_store` rafraîchi à chaque tick du bot.
-  - Toggle global `adaptive_enabled` dans `BotConfig` (default ON).
-- **API** : `GET /api/market/regime` (état par symbole) + `POST /api/bot/adaptive` (toggle).
-- **Frontend** : nouvel écran `/regime` accessible depuis "Plus → Régime de marché" — toggle, légende des règles, état par symbole avec badge couleur + confiance + métriques (σ, slope, range), refresh auto 6s + pull-to-refresh.
-
-## Itération v4
-- Cloudflare Tunnel pour VPS (`setup_cloudflare_tunnel.ps1`).
-- Journal AI (Claude Sonnet 4.5) avec streaming SSE.
-
-## Itération v3
-- Bugfix `daily_reset` boucle infinie.
-- Validation paper trading configurable.
-- Live MT5 trading toggle.
-- Page Santé du serveur.
-- Auto-update endpoint.
+## Problème original
+Bot de trading 100% automatisé 24/7 connecté à MetaTrader 5 (Forex/CFD), gestion du risque stricte, mode paper trading, journal IA, adaptation au régime de marché, dashboard fintech pro. Backend déployé sur VPS Windows (lib MT5 = Windows only), frontend Expo React Native.
 
 ## Architecture
-- Frontend : Expo Router, JWT secure storage, WS live + polling fallback
-- Backend : FastAPI + Motor MongoDB, JWT bcrypt, AES-256-GCM, asyncio bot loop
-- Trading : interne (simulator) OU MT5 natif Windows OU MT5 bridge
-- IA : Claude Sonnet 4.5 via Emergent LLM Key (streaming SSE)
-- Adaptatif : détection régime + filtrage stratégies + sizing dynamique
-- VPS Windows : `install.ps1` + `auto_update.ps1` + `setup_cloudflare_tunnel.ps1`
+- **Frontend** : Expo (preview Emergent) → `EXPO_PUBLIC_BACKEND_URL` = tunnel Cloudflare du VPS (`https://cult-spa-projectors-exceptional.trycloudflare.com`)
+- **Backend VPS Windows** : `C:\trading-bot`, venv, uvicorn (Tâche planifiée interactive "TradingBotBackend"), MongoDB local, MT5 natif (RoboForex `C:\Program Files\RoboForex MT5 Terminal\terminal64.exe`)
+- **Déploiement** : code → "Save to GitHub" (repo realowg111/tradingbot) → `POST /api/system/update` (git pull à distance) → restart tâche par l'utilisateur (PAS de hot reload sur le VPS, et un process python zombie peut survivre → utiliser `Get-Process python* | Stop-Process -Force` avant relance)
+- **Compte réel** : RoboForex-Pro, login 68323992, levier 1:1000, ~532 USD
 
-## Roadmap
-- Splitter `server.py` en routers
-- Notifications push (sur demande)
-- Tunnel Cloudflare nommé (URL fixe)
-- Backtest de l'adaptation (comparer adaptive ON vs OFF)
-- Marketplace stratégies
+## Itération v7 (current) — REFONTE "MT5 = source de vérité" ✅ DÉPLOYÉE SUR VPS
+- **Nouveau service `services/live_account.py`** : résolveur central. `is_live()` = mode real + MT5 connecté → balance/equity/marge/marge libre/P&L flottant depuis MT5 ; positions = MT5 (avec origin bot/manual depuis le comment) ; trades = historique deals MT5 groupés par position_id (inclut trades manuels, choix utilisateur) ; `period_pnl` (jour/7j/30j). Cache 10s sur le daily P&L.
+- **`/api/bot/state` unifié** = `_build_snapshot_data()` partagé avec le WS (state résolu + positions + mt5_status + mt5_account). state inclut: source (mt5/sim), margin, free_margin, account_currency, leverage, daily_start_balance précis (balance - realized_today).
+- **`/api/positions/open`** : MT5 en live, sinon sim filtré par mode (bug "positions fantômes" corrigé). `/api/positions/{id}/close` ferme via MT5 si live.
+- **`/api/trades`, `/trades/metrics`, `/trades/equity-curve`** : source MT5 en réel. Nouvelles métriques: pnl_today/week/month, avg_win, avg_loss, win_loss_ratio, source.
+- **`bot_runner.py` sécurité** : en réel exige real_unlocked + live_mt5_trading_enabled + MT5 connecté (sinon pause explicite, AUCUNE position interne) ; _manage_positions ne simule QUE le mode demo, sync les positions MT5 (ticket disparu → CLOSED local, pas de mutation balance), archive les positions "real" internes legacy ; sizing sur la VRAIE balance MT5 ; garde-fous : perte hebdo (weekly_loss_limit_pct=10), drawdown max vs peak (max_total_drawdown_pct=20), spread anormal (max_spread_pct=0.1), reset hebdo + peak_equity ; kill switch ferme AUSSI les positions MT5.
+- **Dashboard** : badge LIVE MT5/SIMULATION, devise du compte, Marge libre, tuiles P&L jour/7j/30j, métriques Ratio G/P, chip MANUEL sur les positions manuelles.
+- **Tests** : 56 pytest (`/app/backend/tests/`) ciblant le backend LOCAL uniquement (conftest → localhost:8001, ne JAMAIS pointer les tests sur le VPS live). Vérifié e2e sur le VPS : source=mt5, balance 532.60 USD, daily_pnl +32.60, 2 trades manuels XAUUSD dans l'historique, metrics OK, dashboard screenshot OK.
+- `auto_update.ps1` corrigé (tâche planifiée au lieu du Service).
+- ⚠️ En attente du prochain déploiement (déjà dans le code sandbox, PAS encore sur VPS) : daily_start_balance précis en live (% jour exact).
+
+## Historique v6
+- Reset mot de passe admin (script Base64 `reset_password.ps1`) : admin@trading.bot / Trading2025!
+- Fix EXPO_PUBLIC_BACKEND_URL (fork l'avait remis sur le sandbox) → tunnel VPS
+- Fix IPC timeout -10005 : mauvais chemin terminal (vanilla vs RoboForex), réparé à distance via API ; trim espaces/guillemets ; path/password préservés au re-save ; formulaire non écrasé par le polling
+- Suppression verrous mode réel (validation paper + phrase de confirmation) à la demande de l'utilisateur ; bouton "Réel" bascule en 1 tap (phrase envoyée en arrière-plan pour compat)
+
+## Versions antérieures (v1-v5)
+- Moteur simulateur paper trading, stratégies, kill switch, audit logs, WS temps réel
+- Auth JWT (bcrypt/passlib), AES pour credentials MT5
+- Journal IA (Claude Sonnet 4.5, clé Emergent, SSE), Régime de marché (trend/range/volatile + adaptation)
+- Tunnel Cloudflare, migration Service → Tâche planifiée (fix IPC), scripts VPS (`/app/scripts/vps_windows/`)
+
+## État actuel VPS
+- mode=real, real_unlocked=true, bot DÉSACTIVÉ, live_mt5_trading_enabled=FALSE
+- MT5 connecté (native), 532.60 USD
+- Pour trader réel : activer toggle "Trading live MT5" (écran Risque) + bouton ON
+
+## Backlog priorisé
+- P1 : activer live_mt5_trading_enabled + micro-trade test bot (0.01 lot) end-to-end
+- P1 : auto-reconnexion MT5 au démarrage du backend (actuellement reconnexion manuelle après restart VPS)
+- P1 : AutoLogon Windows (bot autonome après reboot VPS)
+- P2 : endpoint /api/system/restart (redémarrage tâche à distance, détaché)
+- P2 : tunnel Cloudflare nommé (URL fixe — quick tunnel éphémère actuellement)
+- P2 : écran Risque : exposer les nouveaux garde-fous (weekly/max DD/spread) + explications débutant
+- P2 : split server.py en routers (auth, mt5, bot, trades, journal)
+- P3 : backtests avancés/optimisation, builds APK/Web, label 'real_no_mt5' UI, pin bcrypt<4
