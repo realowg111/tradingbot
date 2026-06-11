@@ -4,9 +4,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 
-import { Card, Button, Input, SectionTitle, Overline, Stat } from "@/src/components/ui";
+import { Card, Button, Input, SectionTitle, Overline } from "@/src/components/ui";
 import { colors, spacing } from "@/src/theme";
-import { apiGet, apiPut } from "@/src/api/client";
+import { apiGet, apiPut, apiPost } from "@/src/api/client";
 
 export default function RiskSettings() {
   const router = useRouter();
@@ -93,7 +93,7 @@ export default function RiskSettings() {
           <View style={styles.switchRow}>
             <View style={{ flex: 1 }}>
               <Text style={styles.switchLabel}>Pause sur volatilité extrême</Text>
-              <Text style={styles.switchHint}>Suspend l'ouverture si stddev relative {">"} 5%</Text>
+              <Text style={styles.switchHint}>{"Suspend l'ouverture si stddev relative > 5%"}</Text>
             </View>
             <Switch
               testID="risk-volpause-switch"
@@ -104,13 +104,26 @@ export default function RiskSettings() {
           </View>
         </Card>
 
+        <SectionTitle>Garde-fous avancés</SectionTitle>
+        <Card>
+          <Text style={styles.helperText}>
+            {"Protections automatiques du capital : le bot arrête de prendre des positions dès qu'une limite est atteinte."}
+          </Text>
+          <Input label="Perte hebdomadaire max (%)" value={`${r.weekly_loss_limit_pct ?? 10}`} onChangeText={(v) => updNum("weekly_loss_limit_pct", v)} keyboardType="numeric" testID="risk-weekly-input" />
+          <Text style={styles.fieldHint}>{"Pause des nouveaux trades si l'équity perd ce % depuis le début de la semaine"}</Text>
+          <Input label="Drawdown total max (%)" value={`${r.max_total_drawdown_pct ?? 20}`} onChangeText={(v) => updNum("max_total_drawdown_pct", v)} keyboardType="numeric" testID="risk-maxdd-input" />
+          <Text style={styles.fieldHint}>{"Pause si l'équity chute de ce % sous son plus haut historique"}</Text>
+          <Input label="Spread max (%)" value={`${r.max_spread_pct ?? 0.1}`} onChangeText={(v) => updNum("max_spread_pct", v)} keyboardType="numeric" testID="risk-spread-input" />
+          <Text style={styles.fieldHint}>{"Aucune entrée si l'écart achat/vente dépasse ce % du prix (spread anormal)"}</Text>
+        </Card>
+
         <Button title="Enregistrer la gestion du risque" onPress={save} loading={busy} testID="risk-save-button" icon="save" style={{ marginTop: spacing.md }} />
 
         {/* Validation passage en mode réel - configurable */}
         <SectionTitle>Validation passage en mode RÉEL</SectionTitle>
         <Card>
           <Text style={styles.helperText}>
-            Garde-fou avant d'activer le capital réel. Configurez ou désactivez complètement la validation.
+            {"Garde-fou avant d'activer le capital réel. Configurez ou désactivez complètement la validation."}
           </Text>
           <View style={styles.switchRow}>
             <View style={{ flex: 1 }}>
@@ -177,6 +190,7 @@ const styles = StyleSheet.create({
   errBox: { backgroundColor: colors.dangerBg, padding: 10, borderRadius: 8, marginTop: spacing.sm },
   okBox: { flexDirection: "row", alignItems: "center", gap: 6, backgroundColor: colors.successBg, padding: 10, borderRadius: 8, marginTop: spacing.sm },
   helperText: { fontSize: 12, color: colors.textSecondary, lineHeight: 18, marginBottom: spacing.md },
+  fieldHint: { fontSize: 11, color: colors.textMuted, marginTop: -6, marginBottom: spacing.sm, lineHeight: 16 },
   warnBox: { flexDirection: "row", alignItems: "flex-start", gap: 8, marginTop: spacing.md, padding: 10, backgroundColor: colors.warningBg, borderColor: "#FCD34D", borderWidth: 1, borderRadius: 8 },
   warnText: { color: "#92400E", fontSize: 12, flex: 1, lineHeight: 18 },
 });

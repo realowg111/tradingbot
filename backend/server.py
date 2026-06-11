@@ -947,6 +947,123 @@ async def _ws_broadcast_loop():
 @app.on_event("startup")
 async def start_broadcast():
     asyncio.create_task(_ws_broadcast_loop())
+    asyncio.create_task(_mt5_autoconnect_loop())
+
+
+# --- MT5 auto-reconnect: autonomie 24/7 après reboot/restart ---
+async def _mt5_autoconnect_loop():
+    """Reconnects MT5 automatically using the stored admin credentials.
+
+    Runs every 60s. Only attempts when the native lib (or bridge) is available
+    and credentials are saved. Logs only on state change to avoid spam.
+    """
+    await asyncio.sleep(10)  # let the app settle after boot
+    last_error = None
+    while True:
+        try:
+            st = mt5_connector.status()
+            if not mt5_connector.connected and (st.get("has_native_lib") or st.get("has_bridge_url")):
+                doc = await users_col.find_one(
+                    {"is_admin": True, "mt5_credentials": {"$exists": True}},
+                    {"_id": 0, "mt5_credentials": 1},
+                )
+                if doc:
+                    creds = json.loads(decrypt_str(doc["mt5_credentials"]))
+                    result = await mt5_connector.connect(
+                        login=creds["login"], password=creds["password"],
+                        server=creds["server"], broker=creds.get("broker"),
+                        path=creds.get("path"),
+                    )
+                    if result["connected"]:
+                        last_error = None
+                        logger.info("MT5 auto-reconnect: OK")
+                        await audit_col.insert_one(AuditLog(
+                            level="SYSTEM", event="mt5_autoconnect_success",
+                            details={"mode": result["mode"]}).model_dump())
+                    elif result.get("last_error") != last_error:
+                        last_error = result.get("last_error")
+                        logger.warning("MT5 auto-reconnect failed: %s", last_error)
+                        await audit_col.insert_one(AuditLog(
+                            level="ERROR", event="mt5_autoconnect_failed",
+                            details={"error": str(last_error)[:300]}).model_dump())
+        except Exception as e:
+            logger.warning("mt5 autoconnect loop error: %s", e)
+        await asyncio.sleep(60)
+
+
+# --- Redémarrage à distance du backend (VPS Windows) ---
+@api.post("/system/restart")
+async def system_restart(user: UserPublic = Depends(get_current_user)):
+    """Restart the backend via a detached PowerShell (Windows VPS only)."""
+    if not user.is_admin:
+        raise HTTPException(403, "Admin uniquement")
+    if os.name != "nt":
+        raise HTTPException(400, "Disponible uniquement sur le VPS Windows")
+    await audit_col.insert_one(AuditLog(level="SYSTEM", event="system_restart",
+                                        details={"user": user.email}).model_dump())
+    cmd = (
+        'Start-Sleep -Seconds 2; '
+        'Stop-ScheduledTask -TaskName "TradingBotBackend" -ErrorAction SilentlyContinue; '
+        'Get-Process python* -ErrorAction SilentlyContinue | Stop-Process -Force; '
+        'Start-Sleep -Seconds 3; '
+        'Start-ScheduledTask -TaskName "TradingBotBackend"'
+    )
+    DETACHED_PROCESS = 0x00000008
+    CREATE_NEW_PROCESS_GROUP = 0x00000200
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-Command", cmd],
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        close_fds=True,
+    )
+    return {"restarting": True, "message": "Backend redémarre dans ~5 secondes"}
+
+
+# --- Micro-trade test 0.01 lot (vérification exécution réelle) ---
+class TestTradeRequest(BaseModel):
+    symbol: str = "EURUSD"
+    side: str = "BUY"
+    volume: float = 0.01
+
+
+@api.post("/mt5/test-trade")
+async def mt5_test_trade(req: TestTradeRequest, user: UserPublic = Depends(get_current_user)):
+    """Open a micro position on MT5 then close it ~3s later. End-to-end execution test."""
+    if not user.is_admin:
+        raise HTTPException(403, "Admin uniquement")
+    if not mt5_connector.connected:
+        raise HTTPException(400, "MT5 non connecté")
+    side = req.side.upper()
+    if side not in ("BUY", "SELL"):
+        raise HTTPException(400, "side doit être BUY ou SELL")
+    volume = min(max(req.volume, 0.01), 0.1)  # hard cap sécurité
+
+    tick = await mt5_connector.get_price(req.symbol)
+    if not tick or not tick.get("bid"):
+        raise HTTPException(400, f"Pas de prix pour {req.symbol}")
+    price = tick["ask"] if side == "BUY" else tick["bid"]
+    # SL/TP larges (±0.5%) : la position sera refermée manuellement dans 3s
+    if side == "BUY":
+        sl, tp = price * 0.995, price * 1.005
+    else:
+        sl, tp = price * 1.005, price * 0.995
+
+    open_res = await mt5_connector.place_order(req.symbol, side, volume, round(sl, 5), round(tp, 5), comment="bot TEST")
+    await audit_col.insert_one(AuditLog(level="TRADE", event="test_trade_open",
+                                        details={"user": user.email, "symbol": req.symbol, "side": side,
+                                                 "volume": volume, **{k: str(v) for k, v in open_res.items()}}).model_dump())
+    if not open_res.get("ok"):
+        raise HTTPException(400, f"Ouverture échouée: {open_res.get('error')}")
+
+    await asyncio.sleep(3)
+    close_res = await mt5_connector.close_position(open_res["ticket"])
+    await audit_col.insert_one(AuditLog(level="TRADE", event="test_trade_close",
+                                        details={"ticket": open_res["ticket"], **{k: str(v) for k, v in close_res.items()}}).model_dump())
+    return {
+        "ticket": open_res["ticket"],
+        "open": open_res,
+        "close": close_res,
+        "success": bool(open_res.get("ok") and close_res.get("ok")),
+    }
 
 
 # --- Market regime / Adaptive strategy ---
