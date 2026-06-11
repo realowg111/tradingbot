@@ -1096,18 +1096,22 @@ async def system_restart(user: UserPublic = Depends(get_current_user)):
     await audit_col.insert_one(AuditLog(level="SYSTEM", event="system_restart",
                                         details={"user": user.email}).model_dump())
     cmd = (
-        'Start-Sleep -Seconds 2; '
-        'Stop-ScheduledTask -TaskName "TradingBotBackend" -ErrorAction SilentlyContinue; '
+        '"Start-Sleep -Seconds 2; '
+        'schtasks /End /TN TradingBotBackend 2>&1; '
         'Get-Process python* -ErrorAction SilentlyContinue | Stop-Process -Force; '
         'Start-Sleep -Seconds 3; '
-        'Start-ScheduledTask -TaskName "TradingBotBackend"'
+        'schtasks /Run /TN TradingBotBackend 2>&1" '
+        '*>> C:\\trading-bot\\restart.log'
     )
     DETACHED_PROCESS = 0x00000008
     CREATE_NEW_PROCESS_GROUP = 0x00000200
+    CREATE_NO_WINDOW = 0x08000000
     subprocess.Popen(
-        ["powershell", "-NoProfile", "-Command", cmd],
-        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP,
+        f'powershell -NoProfile -ExecutionPolicy Bypass -Command {cmd}',
+        shell=True,
+        creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
         close_fds=True,
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     return {"restarting": True, "message": "Backend redémarre dans ~5 secondes"}
 
