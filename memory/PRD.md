@@ -1,13 +1,18 @@
-# Trading Bot — PRD (v7)
+# Trading Bot — PRD (v8)
 
-## Problème original
-Bot de trading 100% automatisé 24/7 connecté à MetaTrader 5 (Forex/CFD), gestion du risque stricte, mode paper trading, journal IA, adaptation au régime de marché, dashboard fintech pro. Backend déployé sur VPS Windows (lib MT5 = Windows only), frontend Expo React Native.
-
-## Architecture
-- **Frontend** : Expo (preview Emergent) → `EXPO_PUBLIC_BACKEND_URL` = tunnel Cloudflare du VPS (`https://cult-spa-projectors-exceptional.trycloudflare.com`)
-- **Backend VPS Windows** : `C:\trading-bot`, venv, uvicorn (Tâche planifiée interactive "TradingBotBackend"), MongoDB local, MT5 natif (RoboForex `C:\Program Files\RoboForex MT5 Terminal\terminal64.exe`)
-- **Déploiement** : code → "Save to GitHub" (repo realowg111/tradingbot) → `POST /api/system/update` (git pull à distance) → restart tâche par l'utilisateur (PAS de hot reload sur le VPS, et un process python zombie peut survivre → utiliser `Get-Process python* | Stop-Process -Force` avant relance)
-- **Compte réel** : RoboForex-Pro, login 68323992, levier 1:1000, ~532 USD
+## Itération v8 (current) — MOTEUR MULTI-FACTEURS + SÉLECTION DES MARCHÉS ✅ DÉPLOYÉ, BOT TRADE EN RÉEL
+- **BUG CRITIQUE corrigé** : l'ancien moteur décidait sur les prix du SIMULATEUR (random walk) même en réel. Nouveau: `services/market_data.py` (bougies MT5 réelles M15/H1, cache 15s, fallback sim en démo) + sécurité bot_runner: jamais d'exécution live si source != mt5.
+- **`services/decision_engine.py`** : scoring 0-100 sur 6 facteurs (Tendance M15+H1 25pts, Momentum RSI+MACD 15, Structure cassures/S&R 20, Volatilité ATR 15, Spread & session 15, Régime 10). Seuil configurable `min_confidence_score` (70). Explications françaises par facteur. Throttle 1 éval/min/symbole. `latest_evals` en mémoire + persistance signals_col (EXECUTE + presque-signaux). NO_SIGNAL si pas de direction EMA; REJECT si blocking (volatilité extrême, spread anormal, marché fermé) ou score < seuil.
+- **Sélection des marchés** : `GET/POST /api/market/symbols` (catalogue MT5 réel: 94 instruments RoboForex catégorisés forex/crypto/métaux/indices/énergie/actions via `categorize_symbol`), max 10 sélectionnés, `POST /api/market/single-mode` (marché unique à chaud). `effective_symbols(cfg)` = seule source des marchés analysés.
+- **Sizing pro** : lots calculés via specs broker réelles (`get_symbol_info`: contract_size, volume_min/step/max), SL = max(1.5×ATR réel, 0.05% prix), TP = RR×SL, hard cap 1 lot.
+- **Garde-fous live/sim séparés** (fix critique: les refs sim 9442 empoisonnaient les guards vs equity réelle 532 → faux drawdown 94%): BotState.daily_start_live / week_start_equity_live / peak_equity_live, initialisés au 1er tick connecté.
+- **mt5_broker**: get_candles (copy_rates_from_pos M1-D1), get_symbol_info, list_symbols, categorize_symbol.
+- **Frontend**: `markets.tsx` (recherche, chips catégories, toggles, mode unique, seuil) + `signals.tsx` (score barre+seuil, badge EXÉCUTÉ/REJETÉ/PAS DE SIGNAL, 6 facteurs dépliables, refresh 15s) + liens dans "Plus". Fix bug risk.tsx (apiPost manquant → bouton Enregistrer plantait) + nouveaux champs garde-fous exposés.
+- **Endpoints système**: POST /api/system/restart (PowerShell détaché, amélioré avec log C:\trading-bot\restart.log — 1ère version n'a pas fonctionné, à retester), POST /api/mt5/test-trade (micro-trade 0.01 ouvre+ferme 3s, VALIDÉ en réel ticket 2030179949), boucle auto-reconnect MT5 60s (VALIDÉE: reconnecte seul après restart).
+- **VPS scripts**: setup_autologon.ps1 (AutoAdminLogon + tâche restart-on-crash 99×1min + tunnel auto).
+- **Tests**: 65 pytest (decision engine 9, live_account, backend api). VÉRIFIÉ EN PRODUCTION: bot a ouvert 3 positions réelles (EURUSD/GBPUSD/XAUUSD SELL 0.01 lot, score 71/70, SL/TP ATR posés), BTCUSD rejeté 62<70, US100 bloqué par la sécurité anti-sim (bougies indisponibles → src=sim).
+- État VPS: mode real, bot ACTIF, live_mt5 ON, MT5 connecté auto, balance ~532 USD.
+- ⚠️ Limites connues: US100/indices sans bougies MT5 (vérifier nom symbole RoboForex), restart à distance v1 défaillant (v2 logguée à tester), trades_today compté en interne (pas les manuels), conversion devise profit non-USD approximative.
 
 ## Itération v7 (current) — REFONTE "MT5 = source de vérité" ✅ DÉPLOYÉE SUR VPS
 - **Nouveau service `services/live_account.py`** : résolveur central. `is_live()` = mode real + MT5 connecté → balance/equity/marge/marge libre/P&L flottant depuis MT5 ; positions = MT5 (avec origin bot/manual depuis le comment) ; trades = historique deals MT5 groupés par position_id (inclut trades manuels, choix utilisateur) ; `period_pnl` (jour/7j/30j). Cache 10s sur le daily P&L.
