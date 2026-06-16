@@ -204,22 +204,32 @@ export default function MT5Screen() {
           </Card>
         ) : null}
 
-        {/* Help banner */}
+        {/* Help banner - smart redirect to Settings when on Linux backend */}
         {!hasNative && !hasBridge ? (
-          <Card style={{ marginTop: spacing.md, backgroundColor: colors.warningBg, borderColor: "#FCD34D" }}>
-            <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
-              <Ionicons name="information-circle" size={18} color={colors.warning} />
-              <View style={{ flex: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: "700", color: "#92400E", marginBottom: 4 }}>Activer la synchro live MT5</Text>
-                <Text style={{ fontSize: 12, color: "#92400E", lineHeight: 18 }}>
-                  Notre backend tourne sur Linux. La librairie MetaTrader5 nécessite Windows. 2 options :{"\n\n"}
-                  <Text style={{ fontWeight: "700" }}>1. Backend Windows</Text> : déployer le code sur un VPS Windows + installer `pip install MetaTrader5`.{"\n"}
-                  <Text style={{ fontWeight: "700" }}>2. Bridge Agent</Text> : lancer notre script `scripts/mt5_agent.py` sur votre PC/VPS Windows (avec MT5 + Python), puis configurer `MT5_BRIDGE_URL=http://...` dans le `.env` du backend.{"\n\n"}
-                  En attendant, le simulateur interne reste actif et fournit du paper trading réaliste.
-                </Text>
+          <TouchableOpacity
+            onPress={() => router.push("/settings")}
+            activeOpacity={0.8}
+            testID="mt5-go-to-settings"
+          >
+            <Card style={{ marginTop: spacing.md, backgroundColor: "#fef3c7", borderColor: "#fbbf24", borderWidth: 1 }}>
+              <View style={{ flexDirection: "row", gap: 10, alignItems: "flex-start" }}>
+                <Ionicons name="settings-outline" size={22} color="#b45309" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 14, fontWeight: "800", color: "#78350f", marginBottom: 6 }}>
+                    🔧 L&apos;app pointe vers le backend Emergent (Linux, sans MT5)
+                  </Text>
+                  <Text style={{ fontSize: 12, color: "#78350f", lineHeight: 18 }}>
+                    Pour voir tes vraies données MT5, l&apos;app doit pointer vers <Text style={{ fontWeight: "800" }}>ton VPS Windows</Text>.{"\n\n"}
+                    👉 <Text style={{ fontWeight: "700" }}>Touche ce bandeau pour aller dans Réglages</Text> et saisir l&apos;URL de ton tunnel Cloudflare.
+                  </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 4, marginTop: 8 }}>
+                    <Text style={{ fontSize: 11, fontWeight: "800", color: "#b45309" }}>OUVRIR LES RÉGLAGES</Text>
+                    <Ionicons name="arrow-forward" size={14} color="#b45309" />
+                  </View>
+                </View>
               </View>
-            </View>
-          </Card>
+            </Card>
+          </TouchableOpacity>
         ) : null}
 
         {/* Specific tip for VPS service not finding MT5 */}
