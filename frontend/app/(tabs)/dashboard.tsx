@@ -61,6 +61,24 @@ export default function Dashboard() {
     }
   };
 
+  const reconnectMt5 = async () => {
+    if (busy) return;
+    setBusy(true);
+    toast.show({ type: "info", title: "Reconnexion MT5…", message: "Tentative de connexion en cours" });
+    try {
+      const r = await apiPost<any>("/mt5/reconnect");
+      if (r?.connected) {
+        toast.show({ type: "success", title: "MT5 reconnecté ✅", message: `Mode ${r.mode}` });
+      } else {
+        toast.show({ type: "danger", title: "Échec reconnexion", message: r?.last_error || "Vérifie que MT5 est ouvert sur le VPS" });
+      }
+    } catch (e: any) {
+      toast.show({ type: "danger", title: "Erreur", message: e.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const state = snapshot?.state;
   const positions = snapshot?.positions ?? [];
   const prices = snapshot?.prices ?? {};
@@ -109,11 +127,12 @@ export default function Dashboard() {
           />
           <Pill
             icon={mt5?.connected ? "link" : "cloud-offline-outline"}
-            label={mt5?.connected ? `MT5 ${mt5.mode === "native" ? "NATIF" : "BRIDGE"}` : "MT5 SIMULÉ"}
+            label={mt5?.connected ? `MT5 ${mt5.mode === "native" ? "NATIF" : "BRIDGE"}` : (busy ? "RECONNEXION…" : "RECONNECTER MT5")}
             color={mt5?.connected ? colors.success : colors.warning}
             bg={mt5?.connected ? colors.successBg : colors.warningBg}
+            pulse={!mt5?.connected}
             testID="header-mt5-pill"
-            onPress={() => router.push("/mt5")}
+            onPress={mt5?.connected ? () => router.push("/mt5") : reconnectMt5}
           />
         </View>
       </View>

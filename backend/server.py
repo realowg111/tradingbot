@@ -1079,10 +1079,10 @@ async def start_broadcast():
 async def _mt5_autoconnect_loop():
     """Reconnects MT5 automatically using the stored admin credentials.
 
-    Runs every 60s. Only attempts when the native lib (or bridge) is available
+    Runs every 10s. Only attempts when the native lib (or bridge) is available
     and credentials are saved. Logs only on state change to avoid spam.
     """
-    await asyncio.sleep(10)  # let the app settle after boot
+    await asyncio.sleep(5)  # let the app settle after boot
     last_error = None
     while True:
         try:
@@ -1113,7 +1113,40 @@ async def _mt5_autoconnect_loop():
                             details={"error": str(last_error)[:300]}).model_dump())
         except Exception as e:
             logger.warning("mt5 autoconnect loop error: %s", e)
-        await asyncio.sleep(60)
+        await asyncio.sleep(10)
+
+
+# --- Force MT5 reconnect endpoint ---
+@api.post("/mt5/reconnect")
+async def mt5_force_reconnect(user: UserPublic = Depends(get_current_user)):
+    """Force a full MT5 reconnect using saved credentials.
+
+    Shuts down the lib then re-initializes. Useful when the connection went stale
+    or you want to refresh credentials after broker maintenance.
+    """
+    if not user.is_admin:
+        raise HTTPException(403, "Admin uniquement")
+    doc = await users_col.find_one(
+        {"is_admin": True, "mt5_credentials": {"$exists": True}},
+        {"_id": 0, "mt5_credentials": 1},
+    )
+    if not doc:
+        raise HTTPException(400, "Aucune credentials MT5 enregistrée. Va dans Plus → Connexion MT5.")
+    try:
+        await mt5_connector.disconnect()
+    except Exception:
+        pass
+    creds = json.loads(decrypt_str(doc["mt5_credentials"]))
+    result = await mt5_connector.connect(
+        login=creds["login"], password=creds["password"],
+        server=creds["server"], broker=creds.get("broker"),
+        path=creds.get("path"),
+    )
+    await audit_col.insert_one(AuditLog(
+        level="SYSTEM", event="mt5_force_reconnect",
+        details={"user": user.email, "connected": result.get("connected"), "error": result.get("last_error")},
+    ).model_dump())
+    return result
 
 
 # --- Redémarrage à distance du backend (VPS Windows) ---

@@ -273,17 +273,36 @@ class MT5Connector:
         self._reconnect_task = asyncio.create_task(self._reconnect_loop())
 
     async def _reconnect_loop(self):
+        """Aggressive health-check + reconnect loop.
+
+        Every 10s:
+        - native: pings terminal_info() AND account_info(). If either is None,
+          mark disconnected and re-initialize MT5 with saved creds.
+        - bridge: pings /health endpoint.
+        """
         while True:
-            await asyncio.sleep(30)
+            await asyncio.sleep(10)
             try:
                 if self.mode == "native" and HAS_MT5_NATIVE:
-                    info = await asyncio.to_thread(mt5.terminal_info)
-                    if info is None:
-                        logger.warning("MT5 terminal not responding, attempting reconnect...")
+                    # Silent disconnect detection: terminal OR account info missing
+                    term = await asyncio.to_thread(mt5.terminal_info)
+                    acct = await asyncio.to_thread(mt5.account_info) if term is not None else None
+                    healthy = term is not None and acct is not None
+                    if not healthy:
+                        if self.connected:
+                            logger.warning("MT5 silent disconnect detected (term=%s, acct=%s) -> reconnect", term is not None, acct is not None)
+                            self.connected = False  # force state to disconnected
                         if self._password and self.account_login and self.server:
+                            try:
+                                # shutdown lib first to clear stale handles
+                                await asyncio.to_thread(mt5.shutdown)
+                            except Exception:
+                                pass
                             await self._connect_native(self.account_login, self._password, self.server, self.terminal_path)
                     else:
                         self.last_heartbeat = datetime.now(timezone.utc)
+                        if not self.connected:
+                            self.connected = True  # back online
                 elif self.mode == "bridge":
                     r = await self._client.get(f"{self.bridge_url}/health")
                     if r.status_code == 200 and r.json().get("connected"):
