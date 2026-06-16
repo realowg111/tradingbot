@@ -1,171 +1,130 @@
-# ============================================================================
-# Trading Bot - Configuration Cloudflare Tunnel
-# ============================================================================
-# Expose le backend (http://localhost:8001) sur une URL HTTPS publique.
-# Resout le probleme de Mixed Content (HTTPS frontend vs HTTP backend).
-#
-# USAGE (PowerShell ADMIN sur le VPS) :
-#   Set-ExecutionPolicy Bypass -Scope Process -Force
-#   C:\trading-bot\scripts\vps_windows\setup_cloudflare_tunnel.ps1
-#
-# Ou en one-liner depuis n'importe ou :
-#   iex (Get-Content C:\trading-bot\scripts\vps_windows\setup_cloudflare_tunnel.ps1 -Raw)
-# ============================================================================
+<#
+.SYNOPSIS
+    Script pour configurer Cloudflare Tunnel (expose le backend en HTTPS public)
+    
+.DESCRIPTION
+    - Installe cloudflared
+    - Configure le tunnel pour le backend
+    - Crée une Scheduled Task pour auto-démarrage
+    
+.PARAMETER TunnelName
+    Nom du tunnel Cloudflare
+    
+.EXAMPLE
+    .\setup_cloudflare_tunnel.ps1 -TunnelName "trading-bot-tunnel"
+#>
+
+param(
+    [string]$TunnelName = "trading-bot-tunnel"
+)
 
 $ErrorActionPreference = "Stop"
 
-function Step($msg) { Write-Host ""; Write-Host "==> $msg" -ForegroundColor Cyan }
-function OK($msg)   { Write-Host "    [OK] $msg" -ForegroundColor Green }
-function Warn($msg) { Write-Host "    [!]  $msg" -ForegroundColor Yellow }
-function Die($msg)  { Write-Host "    [X]  $msg" -ForegroundColor Red; exit 1 }
-
+Write-Host "============================================" -ForegroundColor Cyan
+Write-Host "🌐 Configuration Cloudflare Tunnel" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "+---------------------------------------------+" -ForegroundColor Cyan
-Write-Host "|   Cloudflare Tunnel - Setup HTTPS public    |" -ForegroundColor Cyan
-Write-Host "+---------------------------------------------+" -ForegroundColor Cyan
 
-# --- Admin check ---
-$current = [Security.Principal.WindowsIdentity]::GetCurrent()
-$isAdmin = (New-Object Security.Principal.WindowsPrincipal $current).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-if (-not $isAdmin) {
-    Die "Lance PowerShell EN ADMINISTRATEUR (clic droit -> Run as Administrator)"
+# Vérifier droits admin
+if (-NOT ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole] "Administrator")) {
+    Write-Host "❌ Droits administrateur requis!" -ForegroundColor Red
+    exit 1
 }
-OK "Mode administrateur OK"
 
-$AppDir = "C:\trading-bot"
-$CloudflaredExe = "$AppDir\cloudflared.exe"
-$LogDir = "$AppDir\logs"
-$LogFile = "$LogDir\cloudflared.log"
-$ServiceName = "TradingBotTunnel"
-$BackendPort = 8001
+# Installer cloudflared
+Write-Host "📦 Installation de Cloudflare Tunnel..." -ForegroundColor Yellow
 
-if (-not (Test-Path $AppDir)) { New-Item -ItemType Directory -Path $AppDir -Force | Out-Null }
-if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-
-# --- Telecharger cloudflared ---
-Step "Verification de cloudflared.exe..."
-if (-not (Test-Path $CloudflaredExe)) {
-    Step "Telechargement de cloudflared (Cloudflare Tunnel client)..."
-    $url = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-    try {
-        Invoke-WebRequest -Uri $url -OutFile $CloudflaredExe -UseBasicParsing
-        OK "cloudflared telecharge dans $CloudflaredExe"
-    } catch {
-        Die "Echec du telechargement de cloudflared : $($_.Exception.Message)"
-    }
+if (-NOT (Get-Command cloudflared -ErrorAction SilentlyContinue)) {
+    choco install cloudflare-warp -y
+    Write-Host "✅ Cloudflared installé" -ForegroundColor Green
 } else {
-    OK "cloudflared deja present"
+    Write-Host "✅ Cloudflared déjà installé" -ForegroundColor Green
 }
 
-# --- Verifier NSSM (deja installe par install.ps1) ---
-Step "Verification de NSSM (service manager)..."
-$nssm = Get-Command nssm -ErrorAction SilentlyContinue
-if (-not $nssm) {
-    # Tenter d'installer via chocolatey
-    if (Get-Command choco -ErrorAction SilentlyContinue) {
-        Warn "NSSM introuvable, installation via chocolatey..."
-        choco install -y nssm --no-progress | Out-Null
-        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-    } else {
-        Die "NSSM introuvable et chocolatey absent. Lance d'abord install.ps1"
-    }
-}
-OK "NSSM disponible"
+# Créer le fichier de configuration
+Write-Host "
+⚙️  Configuration du tunnel..." -ForegroundColor Yellow
 
-# --- Stop / Remove service existant ---
-Step "Nettoyage de l'ancien service tunnel s'il existe..."
-$existing = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
-if ($existing) {
-    if ($existing.Status -eq 'Running') {
-        Stop-Service -Name $ServiceName -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Seconds 2
-    }
-    nssm remove $ServiceName confirm | Out-Null
-    Start-Sleep -Seconds 2
-    OK "Ancien service supprime"
-} else {
-    OK "Pas d'ancien service"
+$configDir = "C:\cloudflare"
+if (-NOT (Test-Path $configDir)) {
+    New-Item -ItemType Directory -Path $configDir -Force | Out-Null
 }
 
-# Reset log file
-if (Test-Path $LogFile) { Remove-Item $LogFile -Force }
-New-Item -ItemType File -Path $LogFile -Force | Out-Null
+$configFile = Join-Path $configDir "config.yml"
 
-# --- Installer le service NSSM ---
-Step "Installation du service Windows $ServiceName..."
-nssm install $ServiceName $CloudflaredExe "tunnel --no-autoupdate --url http://localhost:$BackendPort" | Out-Null
-nssm set $ServiceName DisplayName "Trading Bot - Cloudflare Tunnel" | Out-Null
-nssm set $ServiceName Description "Expose le backend FastAPI en HTTPS via Cloudflare Quick Tunnel" | Out-Null
-nssm set $ServiceName Start SERVICE_AUTO_START | Out-Null
-nssm set $ServiceName AppStdout $LogFile | Out-Null
-nssm set $ServiceName AppStderr $LogFile | Out-Null
-nssm set $ServiceName AppRotateFiles 1 | Out-Null
-nssm set $ServiceName AppRotateBytes 5242880 | Out-Null
-nssm set $ServiceName AppRestartDelay 5000 | Out-Null
-OK "Service installe"
+$configContent = @"
+tunnel: $TunnelName
+credentials-file: $configDir\cert.pem
 
-# --- Demarrer le service ---
-Step "Demarrage du tunnel..."
-Start-Service -Name $ServiceName
-Start-Sleep -Seconds 5
-OK "Service demarre"
+ingress:
+  - hostname: $TunnelName.trycloudflare.com
+    service: http://localhost:8001
+  - service: http_status:404
+"@
 
-# --- Recuperer l'URL publique ---
-Step "Recuperation de l'URL HTTPS publique..."
-$publicUrl = $null
-$maxTries = 30
-for ($i = 1; $i -le $maxTries; $i++) {
-    Start-Sleep -Seconds 2
-    if (Test-Path $LogFile) {
-        $content = Get-Content $LogFile -Raw -ErrorAction SilentlyContinue
-        if ($content -and $content -match "(https://[a-z0-9-]+\.trycloudflare\.com)") {
-            $publicUrl = $matches[1]
-            break
-        }
-    }
-    Write-Host "    ... attente du tunnel ($i/$maxTries)" -ForegroundColor Gray
+Set-Content -Path $configFile -Value $configContent -Encoding UTF8
+Write-Host "✅ Fichier de configuration créé: $configFile" -ForegroundColor Green
+
+# Créer Scheduled Task pour le tunnel
+Write-Host "
+📅 Création Scheduled Task pour Cloudflare Tunnel..." -ForegroundColor Yellow
+
+$taskName = "CloudflareTunnel"
+$existingTask = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+
+if ($existingTask) {
+    Write-Host "Suppression de la tâche existante..." -ForegroundColor Gray
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
 }
 
-Write-Host ""
-Write-Host "+---------------------------------------------+" -ForegroundColor Green
-if ($publicUrl) {
-    Write-Host "|       TUNNEL ACTIF !                        |" -ForegroundColor Green
-    Write-Host "+---------------------------------------------+" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "URL PUBLIQUE HTTPS DU BACKEND :" -ForegroundColor Yellow
-    Write-Host ""
-    Write-Host "  $publicUrl" -ForegroundColor Cyan
-    Write-Host ""
-    Write-Host "TEST RAPIDE :" -ForegroundColor Yellow
-    Write-Host "  Invoke-WebRequest $publicUrl/api/health | Select-Object -ExpandProperty Content" -ForegroundColor Gray
-    Write-Host ""
-    Write-Host "COPIE CETTE URL ET ENVOIE-LA A L'AGENT EMERGENT" -ForegroundColor Magenta
-    Write-Host "pour qu'il configure le frontend." -ForegroundColor Magenta
-    Write-Host ""
+$action = New-ScheduledTaskAction `
+    -Execute "cloudflared.exe" `
+    -Argument "tunnel run $TunnelName"
 
-    # Tester l'URL
-    Step "Test de l'URL..."
-    try {
-        $response = Invoke-WebRequest -Uri "$publicUrl/api/health" -UseBasicParsing -TimeoutSec 10
-        OK "API repond ! Status: $($response.StatusCode)"
-    } catch {
-        Warn "L'URL ne repond pas encore (peut prendre 30s). Re-essaye dans 1 minute."
-    }
-} else {
-    Write-Host "|       URL NON TROUVEE                       |" -ForegroundColor Red
-    Write-Host "+---------------------------------------------+" -ForegroundColor Red
-    Write-Host ""
-    Warn "Le tunnel a peut-etre demarre mais l'URL n'a pas ete capturee."
-    Warn "Verifie les logs : Get-Content $LogFile -Tail 50"
-    Write-Host ""
+$trigger = New-ScheduledTaskTrigger -AtStartup
+$principal = New-ScheduledTaskPrincipal -UserID "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
+$task = New-ScheduledTask -Action $action -Trigger $trigger -Principal $principal
+
+Register-ScheduledTask -TaskName $taskName -InputObject $task -Force | Out-Null
+Write-Host "✅ Scheduled Task créée: $taskName" -ForegroundColor Green
+
+# Test du tunnel (optionnel)
+Write-Host "
+🧪 Tester le tunnel immédiatement? (Y/n):" -ForegroundColor Yellow
+$testResponse = Read-Host
+
+if ($testResponse -ne "n") {
+    Write-Host "
+⏳ Lancement du tunnel (Ctrl+C pour arrêter)..." -ForegroundColor Cyan
+    & cloudflared.exe tunnel run $TunnelName
 }
 
-Write-Host "GESTION DU TUNNEL :" -ForegroundColor Cyan
-Write-Host "  Statut    : Get-Service $ServiceName" -ForegroundColor Gray
-Write-Host "  Redemarrer: Restart-Service $ServiceName" -ForegroundColor Gray
-Write-Host "  Logs      : Get-Content $LogFile -Tail 50 -Wait" -ForegroundColor Gray
-Write-Host "  Arreter   : Stop-Service $ServiceName" -ForegroundColor Gray
-Write-Host ""
-Write-Host "NOTE : L'URL change si le service redemarre (Quick Tunnel gratuit)." -ForegroundColor Yellow
-Write-Host "       Pour une URL fixe, il faut un compte Cloudflare + domaine." -ForegroundColor Yellow
-Write-Host ""
+# Résumé
+Write-Host "
+" -ForegroundColor White
+Write-Host "============================================" -ForegroundColor Green
+Write-Host "✅ CLOUDFLARE TUNNEL CONFIGURÉ!" -ForegroundColor Green
+Write-Host "============================================" -ForegroundColor Green
+Write-Host "
+📋 Résumé:" -ForegroundColor Cyan
+Write-Host "  ✓ Cloudflared installé"
+Write-Host "  ✓ Tunnel: $TunnelName"
+Write-Host "  ✓ Configuration: $configFile"
+Write-Host "  ✓ Auto-démarrage configuré"
+
+Write-Host "
+🌐 URL PUBLIQUE:" -ForegroundColor Green
+Write-Host "  https://$TunnelName.trycloudflare.com" -ForegroundColor Cyan
+
+Write-Host "
+📝 À utiliser dans .env frontend:" -ForegroundColor Yellow
+Write-Host "  EXPO_PUBLIC_BACKEND_URL=https://$TunnelName.trycloudflare.com" -ForegroundColor Cyan
+
+Write-Host "
+⚠️  NOTES:" -ForegroundColor Yellow
+Write-Host "  • L'URL change à chaque redémarrage (tunnel quick)"
+Write-Host "  • Pour une URL fixe, migrer vers Named Tunnel (domaine requis)"
+Write-Host "  • Vérifier la Scheduled Task: Get-ScheduledTask -TaskName 'CloudflareTunnel'"
+
+Write-Host "
+"
