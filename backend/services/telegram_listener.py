@@ -93,12 +93,14 @@ class TelegramListener:
             self._authorized = await self.client.is_user_authorized()
             if self._authorized:
                 logger.info("Telegram session authorized -> registering handlers")
+                self._last_error = None
                 await self._register_handlers()
+                if self._runner_task is None or self._runner_task.done():
+                    self._runner_task = asyncio.create_task(self._run_until_disconnected())
             else:
                 logger.warning("Telegram session NOT authorized. Use POST /api/telegram/start-login")
-
-            if self._runner_task is None or self._runner_task.done():
-                self._runner_task = asyncio.create_task(self._run_until_disconnected())
+                # Stay connected (needed for SMS flow), but do NOT start run_until_disconnected
+                # because Telegram closes the socket without an auth key.
         except Exception as e:
             self._last_error = str(e)
             logger.exception("connect_and_maybe_start error")
@@ -149,8 +151,12 @@ class TelegramListener:
             self._authorized = True
             self._login_in_progress = False
             self._phone_code_hash = None
+            self._last_error = None
             await self._register_handlers()
-            logger.info("Telegram login OK -> handlers registered")
+            # Start the runner now that we have a valid session
+            if self._runner_task is None or self._runner_task.done():
+                self._runner_task = asyncio.create_task(self._run_until_disconnected())
+            logger.info("Telegram login OK -> handlers registered + runner started")
             return {"status": "authorized"}
 
     async def finish_login_with_password(self, password: str) -> dict:
@@ -162,7 +168,10 @@ class TelegramListener:
             await self.client.sign_in(password=password)
             self._authorized = True
             self._login_in_progress = False
+            self._last_error = None
             await self._register_handlers()
+            if self._runner_task is None or self._runner_task.done():
+                self._runner_task = asyncio.create_task(self._run_until_disconnected())
             return {"status": "authorized"}
 
     async def _register_handlers(self) -> None:
