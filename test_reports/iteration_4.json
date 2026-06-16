@@ -1,0 +1,51 @@
+{
+  "summary": "Backend-only validation of the new Telegram copy-trading module + regression on existing endpoints. Added /app/backend/tests/test_telegram_copy.py with 26 new pytest tests. Full backend suite: 91/91 PASSED in 56.76s (65 previous + 26 new). All target features verified against LOCAL backend (http://localhost:8001). Telegram routes exist, return correct shape, are auth-gated (401 without JWT), config persists across GET/POST partial updates, and the LLM-based parser (Claude Sonnet 4.5 via emergentintegrations) correctly handles: (1) RentaTrade format with entry range + runner TP, (2) non-signal chat, (3) SELL with GOLD->XAUUSD alias. Backend stayed responsive even though Telethon cannot reach Telegram from sandbox (AuthKeyUnregisteredError in logs is EXPECTED per the agent-to-agent context note). No regression: /api/health, /api/auth/login, /api/bot/state, /api/positions/open, /api/trades/metrics, /api/mt5/status all still 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/telegram/start-login",
+        "issue": "On sandbox returns 500 with 'AuthKeyUnregisteredError' because Telethon cannot reach Telegram MTProto. This is documented as EXPECTED in the review request (agent_to_agent_context_note). Auth-gate test (401 without JWT) passes — the endpoint itself is correctly wired. Not a bug, just to be aware on the VPS."
+      },
+      {
+        "endpoint": "passlib/bcrypt",
+        "issue": "Cosmetic: 'AttributeError: module bcrypt has no attribute __about__' still in logs (login works). Same as previous iterations, pin bcrypt<4 to silence."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_telegram_copy.py",
+    "/app/backend/tests/conftest.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Nothing blocking — Telegram copy-trading module is fully functional on the backend side (parser, config, signals listing, auth gates, regression).",
+    "On the user's VPS (Windows), the listener should be able to actually connect to Telegram MTProto and the SMS-login flow (POST /api/telegram/start-login -> /api/telegram/submit-code) must be exercised once manually to persist the .session file at TELEGRAM_SESSION_PATH=/app/backend/data/telegram.session. After that, the channel 'RentaTrade Z VIP' must be set via POST /api/telegram/config {channels: ['RentaTrade Z VIP']}.",
+    "Optional UX: expose a frontend page to drive the SMS flow + display the live status (configured/authorized/connected/channels) + a 'Shadow mode ON/OFF' toggle. The 6 config fields are already PATCHable independently.",
+    "Optional: when parser returns is_signal=true but the message contains both a 'BUY' and a numeric '-' delimiter that the regex fallback misreads (e.g. 'BUY XAUUSD ENTRY 4340 - 4337'), make sure the LLM path is reached (works fine in current tests because EMERGENT_LLM_KEY is set)."
+  ],
+  "critical_code_review_comments": [
+    "/app/backend/services/telegram_copy_trader.py: process_message uses await on a non-async insert path when telegram_signals_col already has a unique index on (chat_id, message_id) — the find_one anti-dup pre-check is fine but the insert can still race under high-throughput. Consider catching DuplicateKeyError and ignoring it instead of the pre-check (idempotent + atomic).",
+    "/app/backend/services/telegram_copy_trader.py: '_resolve_mt5_symbol' returns the symbol_hint unchanged when MT5 is disconnected — downstream get_price/place_order will then fail with a generic error. Consider returning None when disconnected so the rejection reason is explicit ('mt5_disconnected') instead of 'no_tick'.",
+    "/app/backend/services/signal_parser.py: '_fallback_regex_parse' detects symbol via 'BUY|SELL|... + token' but the RentaTrade msg has 'BUY XAUUSD' on the SAME line, so the regex relies on a non-greedy match. Tested OK with current sample, but messages where the side keyword is on a separate line from the ticker will be missed by the fallback. The LLM path handles this — just be sure to keep EMERGENT_LLM_KEY set in production.",
+    "/app/backend/services/signal_parser.py: '_normalize_symbol' uses 'startswith' fallback which can mis-map e.g. 'GOLDEN' -> 'XAUUSD'. Probably fine in practice but a stricter check (exact alias OR a curated list) would be safer.",
+    "/app/backend/server.py: '/api/telegram/start-login' bubbles ALL Telethon exceptions as HTTP 500 with raw stringified detail. Consider catching ConnectionError/OSError specifically and returning a more actionable error (e.g. 'telegram_unreachable'). The Telethon AuthKeyUnregisteredError is currently surfaced raw to clients.",
+    "/app/backend/server.py: '/api/telegram/test-parse' has no rate-limit and calls Claude Sonnet 4.5 on each invocation -> cost surface. Consider a per-user rate limit or a cap on len(text).",
+    "/app/backend/server.py is now 1452 lines (>2x the 700-line threshold). Splitting into routers/{auth,bot,trades,mt5,ws,costs,backtest,telegram}.py is overdue (flagged since iteration 1)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_telegram_copy.py (created — 26 new tests)"
+  ],
+  "success_rate": {"backend": "100% (91/91 — 26/26 new + 65/65 previous)", "frontend": "not tested (review_request: backend only, skip frontend)"},
+  "seed_data_creation": "TestTelegramStatusAndConfig mutates telegram_state collection (channels, symbols_whitelist, split_legs, max_entry_drift_pct, shadow_mode, enabled) but restores defaults at the end of test_config_partial_update_each_field. Final persisted values: enabled=True, shadow_mode=True, channels=[], symbols_whitelist=[], split_legs=True, max_entry_drift_pct=0.5. No new telegram_signals docs were created by tests (only reads).",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend is healthy: 91/91. Telegram module is wired correctly. On the sandbox, Telethon CANNOT connect to Telegram (AuthKeyUnregisteredError is EXPECTED and must NOT be treated as a bug) — therefore /api/telegram/status returns connected=False, authorized=False and /api/telegram/start-login returns 500. All other Telegram endpoints (status, config GET/POST, signals, test-parse) work and persist correctly. The parser uses Claude Sonnet 4.5 via emergentintegrations + EMERGENT_LLM_KEY (set in /app/backend/.env). On VPS Windows, the user must call POST /api/telegram/start-login -> /api/telegram/submit-code once to create the .session file. Admin: admin@trading.bot / Trading2025!. Local backend URL: http://localhost:8001. NEVER call the user's VPS via EXPO_PUBLIC_BACKEND_URL.",
+  "rca_of_issue": "No bug discovered this iteration. The new Telegram copy-trading module is correctly implemented: routes exist under /api/telegram/*, all are auth-gated via get_current_user (JWT), config persists in MongoDB collection telegram_state (single doc upsert pattern), signals listing reads from telegram_signals with status filter and a hard 200 cap on limit, and the parser correctly handles RentaTrade format (entry range -> midpoint 4338.5, TP1 numeric + TP2='OUVERT' runner=true, confidence>=0.8 from LLM), non-signal chat, and SELL+GOLD->XAUUSD alias. Backend startup is resilient: Telethon failure during connect_and_maybe_start is caught and logged as WARNING, FastAPI continues to serve."
+}
