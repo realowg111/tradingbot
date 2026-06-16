@@ -160,6 +160,39 @@ export default function Dashboard() {
           />
         ) : null}
 
+        {/* MT5 Reconnect Banner - shown when MT5 is not connected */}
+        {!mt5?.connected && (
+          <TouchableOpacity
+            onPress={reconnectMt5}
+            disabled={busy}
+            activeOpacity={0.8}
+            style={styles.mt5Banner}
+            testID="mt5-reconnect-banner"
+          >
+            <View style={styles.mt5BannerLeft}>
+              <View style={styles.mt5BannerIcon}>
+                <Ionicons name={busy ? "sync" : "cloud-offline"} size={22} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.mt5BannerTitle}>{busy ? "Reconnexion en cours…" : "MT5 déconnecté"}</Text>
+                <Text style={styles.mt5BannerSub} numberOfLines={2}>
+                  {busy
+                    ? "Tentative de reconnexion à ton compte MT5…"
+                    : (mt5?.last_error
+                        ? `${mt5.last_error.substring(0, 80)}${mt5.last_error.length > 80 ? "…" : ""}`
+                        : "Touche pour reconnecter à ton compte de trading")}
+                </Text>
+              </View>
+            </View>
+            {!busy && (
+              <View style={styles.mt5BannerBtn}>
+                <Ionicons name="refresh" size={16} color="#fff" />
+                <Text style={styles.mt5BannerBtnTxt}>RECONNECTER</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        )}
+
         {/* Hero Balance Card */}
         <View style={styles.heroCard}>
           <View style={styles.heroTop}>
@@ -526,6 +559,39 @@ const styles = StyleSheet.create({
   manualChip: { backgroundColor: colors.surfaceAlt, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, borderWidth: 1, borderColor: colors.border },
   manualChipText: { fontSize: 8, fontWeight: "800", color: colors.textSecondary, letterSpacing: 1 },
   sourceBadge: { flexDirection: "row", alignItems: "center", gap: 4, paddingHorizontal: 7, paddingVertical: 3, borderRadius: 100 },
+  sourceDot: { width: 6, height: 6, borderRadius: 3 },
+  sourceBadgeText: { fontSize: 9, fontWeight: "800", letterSpacing: 1 },
+
+  // MT5 Reconnect banner (visible when MT5 disconnected)
+  mt5Banner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#ea580c",
+    borderRadius: radius.lg,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+    ...shadow.md,
+  },
+  mt5BannerLeft: { flexDirection: "row", alignItems: "center", gap: spacing.sm, flex: 1 },
+  mt5BannerIcon: {
+    width: 40, height: 40, borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center", justifyContent: "center",
+  },
+  mt5BannerTitle: { color: "#fff", fontSize: 15, fontWeight: "800", letterSpacing: -0.2 },
+  mt5BannerSub: { color: "rgba(255,255,255,0.85)", fontSize: 12, marginTop: 2 },
+  mt5BannerBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: "rgba(255,255,255,0.25)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  mt5BannerBtnTxt: { color: "#fff", fontSize: 11, fontWeight: "800", letterSpacing: 0.5 },
   sourceDot: { width: 5, height: 5, borderRadius: 3 },
   sourceBadgeText: { fontSize: 9, fontWeight: "800", letterSpacing: 1 },
 
