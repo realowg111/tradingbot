@@ -21,6 +21,8 @@ config_col = db["bot_config"]
 state_col = db["bot_state"]
 candles_col = db["candles"]
 signals_col = db["signals"]
+telegram_signals_col = db["telegram_signals"]
+telegram_state_col = db["telegram_state"]
 
 
 async def ensure_indexes():
@@ -32,3 +34,5 @@ async def ensure_indexes():
     await candles_col.create_index([("symbol", 1), ("ts", -1)])
     await signals_col.create_index([("ts", -1)])
     await signals_col.create_index([("symbol", 1), ("ts", -1)])
+    await telegram_signals_col.create_index([("ts", -1)])
+    await telegram_signals_col.create_index([("chat_id", 1), ("message_id", 1)], unique=True, sparse=True)

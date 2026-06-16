@@ -50,6 +50,9 @@ from services import live_account
 from services.ws_hub import ws_hub
 from services import ai_journal
 from services.market_regime import regime_store, detect_regime
+from services.telegram_listener import telegram_listener
+from services.telegram_copy_trader import process_message as tg_process_message, set_state as tg_set_state, _get_state as tg_get_state
+from database import telegram_signals_col
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("main")
@@ -82,12 +85,40 @@ async def on_startup():
         await state_col.insert_one(BotState().model_dump())
     # Start background bot loop
     await bot_runner.start()
+
+    # Initialize Telegram listener
+    try:
+        from pathlib import Path as _P
+        tg_api_id = os.environ.get("TELEGRAM_API_ID")
+        tg_api_hash = os.environ.get("TELEGRAM_API_HASH")
+        tg_phone = os.environ.get("TELEGRAM_PHONE")
+        tg_channel = os.environ.get("TELEGRAM_CHANNEL", "RentaTrade Z VIP")
+        tg_session = os.environ.get("TELEGRAM_SESSION_PATH", str(ROOT_DIR / "data" / "telegram.session"))
+        if tg_api_id and tg_api_hash and tg_phone:
+            telegram_listener.configure(
+                api_id=int(tg_api_id),
+                api_hash=tg_api_hash,
+                phone_number=tg_phone,
+                session_path=_P(tg_session),
+                channels=[c.strip() for c in tg_channel.split(",") if c.strip()],
+                parse_callback=tg_process_message,
+            )
+            await telegram_listener.connect_and_maybe_start()
+            logger.info("Telegram listener ready (status: %s)", telegram_listener.status())
+        else:
+            logger.info("Telegram disabled (missing TELEGRAM_API_ID/HASH/PHONE)")
+    except Exception:
+        logger.exception("Telegram listener init failed")
     logger.info("Backend ready")
 
 
 @app.on_event("shutdown")
 async def on_shutdown():
     await bot_runner.stop()
+    try:
+        await telegram_listener.disconnect()
+    except Exception:
+        pass
 
 
 # --- Health ---
@@ -1302,6 +1333,111 @@ async def _init_journal_indexes():
         await ai_journal.ensure_indexes()
     except Exception:
         logger.exception("journal indexes init failed")
+
+
+# --- Telegram Copy Trading ---
+class TGCodePayload(BaseModel):
+    code: str
+
+
+class TGPasswordPayload(BaseModel):
+    password: str
+
+
+class TGConfigPatch(BaseModel):
+    enabled: Optional[bool] = None
+    shadow_mode: Optional[bool] = None
+    channels: Optional[List[str]] = None
+    symbols_whitelist: Optional[List[str]] = None
+    split_legs: Optional[bool] = None
+    max_entry_drift_pct: Optional[float] = None
+
+
+class TGTestParsePayload(BaseModel):
+    text: str
+
+
+@api.get("/telegram/status")
+async def telegram_status(user=Depends(get_current_user)):
+    st = telegram_listener.status()
+    tg_state = await tg_get_state()
+    return {**st, "config": tg_state}
+
+
+@api.post("/telegram/start-login")
+async def telegram_start_login(user=Depends(get_current_user)):
+    try:
+        r = await telegram_listener.start_login()
+        return r
+    except Exception as e:
+        logger.exception("telegram start_login")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api.post("/telegram/submit-code")
+async def telegram_submit_code(payload: TGCodePayload, user=Depends(get_current_user)):
+    from telethon.errors import SessionPasswordNeededError
+    try:
+        r = await telegram_listener.finish_login_with_code(payload.code)
+        # When reconfiguring channels after first login, hot-reload:
+        channels = telegram_listener.channels
+        await telegram_listener.reload_channels(channels)
+        return r
+    except SessionPasswordNeededError:
+        raise HTTPException(status_code=403, detail="2fa_password_required")
+    except Exception as e:
+        logger.exception("telegram submit_code")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@api.post("/telegram/submit-password")
+async def telegram_submit_password(payload: TGPasswordPayload, user=Depends(get_current_user)):
+    try:
+        r = await telegram_listener.finish_login_with_password(payload.password)
+        return r
+    except Exception as e:
+        logger.exception("telegram submit_password")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@api.get("/telegram/config")
+async def telegram_get_config(user=Depends(get_current_user)):
+    return await tg_get_state()
+
+
+@api.post("/telegram/config")
+async def telegram_set_config(payload: TGConfigPatch, user=Depends(get_current_user)):
+    patch = {k: v for k, v in payload.model_dump().items() if v is not None}
+    new_state = await tg_set_state(patch)
+    # Hot-reload channels if changed
+    if "channels" in patch:
+        try:
+            await telegram_listener.reload_channels(new_state["channels"] or telegram_listener.channels)
+        except Exception:
+            logger.exception("reload_channels")
+    return new_state
+
+
+@api.get("/telegram/signals")
+async def telegram_get_signals(limit: int = 50, status: Optional[str] = None, user=Depends(get_current_user)):
+    q = {}
+    if status:
+        q["status"] = status
+    cursor = telegram_signals_col.find(q, {"_id": 0}).sort("ts", -1).limit(min(int(limit), 200))
+    items = []
+    async for d in cursor:
+        # Serialize datetime
+        if isinstance(d.get("ts"), datetime):
+            d["ts"] = d["ts"].isoformat()
+        items.append(d)
+    return {"items": items, "count": len(items)}
+
+
+@api.post("/telegram/test-parse")
+async def telegram_test_parse(payload: TGTestParsePayload, user=Depends(get_current_user)):
+    from services.signal_parser import parse_signal as _ps
+    r = await _ps(payload.text)
+    return r
 
 
 # --- Mount router ---
