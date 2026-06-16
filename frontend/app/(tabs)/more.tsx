@@ -12,6 +12,7 @@ import { useAuth } from "@/src/context/AuthContext";
 type Item = { id: string; icon: keyof typeof Ionicons.glyphMap; label: string; description: string; href: string; testId: string };
 
 const items: Item[] = [
+  { id: "settings", icon: "settings-outline", label: "Réglages (URL backend VPS)", description: "Connecter l'app à TON backend VPS pour voir les vraies données MT5", href: "/settings", testId: "more-settings" },
   { id: "telegram", icon: "paper-plane-outline", label: "Copie Telegram (RentATrade)", description: "Recopie automatique des signaux Telegram → MT5 avec Claude IA", href: "/telegram", testId: "more-telegram" },
   { id: "markets", icon: "globe-outline", label: "Marchés autorisés", description: "Choisir les actifs tradés (Forex, crypto, indices…) + mode marché unique", href: "/markets", testId: "more-markets" },
   { id: "signals", icon: "analytics-outline", label: "Signaux & Scores", description: "Score de confiance multi-facteurs et raisons d'entrée/rejet", href: "/signals", testId: "more-signals" },

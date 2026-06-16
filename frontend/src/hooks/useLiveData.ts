@@ -1,9 +1,7 @@
 // WebSocket-based live data hook with polling fallback
 import { useEffect, useState, useRef, useCallback } from "react";
 import { Platform } from "react-native";
-import { getToken } from "@/src/api/client";
-
-const BASE = process.env.EXPO_PUBLIC_BACKEND_URL || "";
+import { getToken, getBaseUrl } from "@/src/api/client";
 
 export type LivePosition = {
   id: string;
@@ -78,7 +76,8 @@ export function useLiveData() {
       setStatus("offline");
       return;
     }
-    const wsUrl = BASE.replace(/^http/, "ws") + `/api/ws?token=${encodeURIComponent(token)}`;
+    const base = await getBaseUrl();
+    const wsUrl = base.replace(/^http/, "ws") + `/api/ws?token=${encodeURIComponent(token)}`;
     try {
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
