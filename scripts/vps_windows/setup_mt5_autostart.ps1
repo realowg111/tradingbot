@@ -56,7 +56,7 @@ Write-Host "`n[OK] MT5 detecte : $Mt5Path" -ForegroundColor Green
 
 # --- 1. Task : MT5 au boot (au logon car MT5 a besoin d'une session interactive) ---
 Write-Host "`n[1/2] Creation de la tache 'demarrage MT5 au logon'..." -ForegroundColor Cyan
-schtasks /Delete /TN $TaskName /F 2>&1 | Out-Null
+cmd /c "schtasks /Delete /TN `"$TaskName`" /F >nul 2>&1"
 
 $action = New-ScheduledTaskAction -Execute $Mt5Path
 $trigger = New-ScheduledTaskTrigger -AtLogon
@@ -81,7 +81,7 @@ if (`$null -eq `$proc) {
 $WatchdogScriptPath = "C:\trading-bot\scripts\vps_windows\mt5_watchdog.ps1"
 Set-Content -Path $WatchdogScriptPath -Value $WatchdogScript -Encoding UTF8
 
-schtasks /Delete /TN $WatchdogTaskName /F 2>&1 | Out-Null
+cmd /c "schtasks /Delete /TN `"$WatchdogTaskName`" /F >nul 2>&1"
 $wdAction = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$WatchdogScriptPath`""
 $wdTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
 $wdPrincipal = New-ScheduledTaskPrincipal -UserId "$env:USERNAME" -LogonType Interactive -RunLevel Highest
