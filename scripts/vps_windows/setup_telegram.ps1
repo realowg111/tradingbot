@@ -64,8 +64,7 @@ try {
         throw "venv introuvable a $pip. Reinstalle le bot avec install.ps1 d'abord."
     }
     & $pip install telethon 2>&1 | Out-Null
-    & $pip install -r "$AppDir\backend\requirements.txt" 2>&1 | Out-Null
-    Write-Ok "Telethon installe + deps a jour"
+    Write-Ok "Telethon installe"
 
     # ------------------------------------------------------------------------
     Write-Step 3 "Configuration des variables d'environnement Telegram..."
