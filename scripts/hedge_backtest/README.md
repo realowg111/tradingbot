@@ -40,3 +40,26 @@ Données : XAUUSD et XAGUSD MoonX sur 264 jours de bourse (oct. 2025 → oct. 20
 | Buy & Hold BTC (même période) | -37 % | -52 % | — |
 
 Sur les métaux, rien n'est robuste. Le trend hedge sur l'or ne gagne qu'avec SMA30/50 (≈ 0 % en SMA20, -4 % en SMA100) et fait zéro sur la période de test. Sur l'argent, les fausses cassures de janvier 2026 l'ont pénalisé. Le pairs argent/or ne gagne qu'avec 4 paramétrages sur 9. Mettre le capital en or quand BTC baisse fait pire que rester à plat : l'or a aussi baissé (corrélation +0,34 avec BTC sur la période).
+
+## Stratégie automatisée recommandée (`python3 auto_strategy_backtest.py`)
+
+Données hebdomadaires MoonX : BTC/ETH depuis 2017, SOL depuis 2020, or depuis nov. 2022. Paramètres fixés à l'avance (valeurs classiques de la littérature), puis grille de sensibilité.
+
+**Trend following multi-actifs (time-series momentum), long-only, ciblage de volatilité**
+- Signal par actif : moyenne des signes des rendements sur 4, 12, 26 et 52 semaines (0 à 1, pas de short).
+- Taille : (volatilité cible / volatilité réalisée sur 12 semaines) / nombre d'actifs × 1,3 ; levier brut plafonné à 2.
+- Rééquilibrage une fois par semaine.
+
+| | CAGR | Max DD | Sharpe | Années positives |
+|---|---|---|---|---|
+| Buy & Hold BTC (depuis 2017) | +24 % | -85 % | 0,65 | 6/10 |
+| **TSMOM crypto, vol 20 % (depuis 2018)** | **+11 %** | **-16 %** | 0,89 | 6/9 (pertes max -5 %) |
+| Donchian 20/10 crypto | +10 % | -31 % | 0,70 | 5/9 |
+| **TSMOM crypto + or, vol 20 % (depuis 2023)** | **+15 %** | **-11 %** | 1,26 | 4/4 |
+| Dual momentum BTC/or/cash | +29 % | -33 % | 0,87 | 3/4 |
+
+Robustesse : TSMOM est positif pour toutes les fenêtres (4 à 52 semaines) et toutes les cibles de vol (10 à 30 %). Rendement et drawdown évoluent ensemble avec la vol cible : environ +6 %/-8 % à 10 %, +16 %/-23 % à 30 %.
+
+Version prop firm (taille ×0,5, vol ~10 %) : environ +6 à 8 %/an, max DD -6 à -8 %, pire semaine -3 %. C'est compatible avec des limites de 10 % de perte totale et 5 % par jour, mais lent pour atteindre un objectif de challenge. Il faut une firme sans limite de temps, qui accepte les EA et le maintien de positions le week-end.
+
+Limites : 2025 et 2026 sont plats (-1 % et 0 %). Les années de grosse hausse sont captées en partie seulement (2023 : +18 % contre +125 % pour BTC). La stratégie est simulée sur clôtures hebdomadaires, sans slippage, et les coûts crypto des prop firms (swaps CFD) peuvent être bien plus élevés que ceux des perps.
