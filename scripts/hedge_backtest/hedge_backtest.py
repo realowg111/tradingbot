@@ -8,6 +8,7 @@ import numpy as np, pandas as pd
 D = sys.argv[1] if len(sys.argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 FEE = 0.0006          # 0.06% per side (typical perp taker fee)
 FUND_DAY = 0.0003     # 0.01% per 8h = 0.03%/day, longs pay shorts (typical positive funding)
+SWAP_BOTH = False     # CFD mode: both longs and shorts pay overnight swap
 
 def load(sym, tf="1d"):
     df = pd.read_csv(f"{D}/{sym}_{tf}.csv")
@@ -18,9 +19,10 @@ def run(weights, prices, bars_per_day):
     rets = prices.pct_change().fillna(0)
     w = weights.shift(1).fillna(0)                      # trade at next bar
     gross = (w * rets).sum(axis=1)
-    turnover = weights.diff().abs().sum(axis=1).shift(1).fillna(0)
+    turnover = weights.diff().fillna(weights).abs().sum(axis=1).shift(1).fillna(0)  # entry fee included
     fees = turnover * FEE
-    funding = (w.clip(lower=0).sum(axis=1) - (-w.clip(upper=0)).sum(axis=1)) * FUND_DAY / bars_per_day
+    longs, shorts = w.clip(lower=0).sum(axis=1), (-w.clip(upper=0)).sum(axis=1)
+    funding = ((longs + shorts) if SWAP_BOTH else (longs - shorts)) * FUND_DAY / bars_per_day
     net = gross - fees - funding
     eq = (1 + net).cumprod()
     return eq, net, turnover
@@ -34,7 +36,7 @@ def stats(eq, net, turnover, bars_per_day, name):
     sharpe = net.mean() / sd * np.sqrt(365 * bars_per_day) if sd > 0 else 0
     dd = (eq / eq.cummax() - 1).min()
     return dict(strat=name, total=tot, cagr=cagr, sharpe=sharpe, maxdd=dd,
-                trades=int((turnover > 0).sum()), calmar=cagr / abs(dd) if dd < 0 else np.nan)
+                trades=max(int((turnover > 0).sum()) - 1, 0), calmar=cagr / abs(dd) if dd < 0 else np.nan)
 
 # ---------- strategies ----------
 def buy_hold(p, a):
