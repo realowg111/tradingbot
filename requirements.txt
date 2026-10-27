@@ -1,0 +1,8 @@
+numpy>=1.26
+pandas>=2.1
+requests>=2.31
+# MetaTrader5 : Windows uniquement (or + crypto CFD via MT5)
+MetaTrader5>=5.0.45; sys_platform == "win32"
+# ccxt : exchanges crypto (Bybit, Binance, OKX...)
+ccxt>=4.3
+pytest>=8

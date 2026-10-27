@@ -1,0 +1,116 @@
+# Configuration du bot scalper or + crypto.
+# Copier en config.toml puis adapter. Les secrets (mots de passe, clés API)
+# se mettent dans .env, jamais ici (voir .env.example).
+
+[bot]
+# "paper" = simulation sur prix réels (aucun ordre envoyé). "live" = argent réel.
+# Rester en paper au moins 2 à 4 semaines avant de passer en live.
+mode = "paper"
+# Source des prix et broker d'exécution : "mt5" (or + crypto CFD) ou "ccxt" (crypto exchange).
+broker = "mt5"
+poll_seconds = 5                # fréquence de gestion des positions (trailing, BE)
+ltf = "5m"                      # unité de temps d'entrée (scalping)
+htf = "1h"                      # unité de temps du biais institutionnel
+paper_starting_equity = 10000.0
+state_file = "state/state.json"
+journal_file = "state/journal.csv"
+log_file = "state/bot.log"
+# À l'arrêt du bot, les positions restent ouvertes avec leur SL/TP chez le broker.
+close_positions_on_shutdown = false
+
+[risk]
+risk_per_trade_pct = 0.5        # risque par trade en % du capital (0,5 % = prudent)
+max_risk_per_trade_pct = 1.0    # plafond absolu
+max_daily_loss_pct = 2.5        # perte max du jour (flottant inclus) -> arrêt jusqu'à demain
+max_drawdown_pct = 8.0          # perte max depuis le plus haut -> arrêt total (kill switch)
+daily_profit_lock_pct = 0.0     # 0 = désactivé ; ex. 3.0 = arrêt après +3 % dans la journée
+max_open_positions = 3
+max_positions_per_group = 1     # ex. BTC/ETH/SOL très corrélés : 1 seule position à la fois
+max_trades_per_day = 20
+loss_streak_pause = 3           # après 3 pertes de suite...
+loss_streak_pause_minutes = 120 # ...pause de 2 h
+loss_streak_risk_factor = 0.5   # et risque divisé par 2 jusqu'au prochain gain
+drawdown_risk_factor = 0.5      # risque divisé par 2 si drawdown > moitié du max
+max_leverage = 10.0             # valeur notionnelle max = capital x 10
+
+[management]
+tp1_r = 1.0                     # 1er objectif à 1R
+tp1_close_fraction = 0.5        # on encaisse 50 % à TP1
+tp2_r = 2.5                     # objectif final (le trailing peut sortir avant)
+# Paliers de sécurisation : quand le prix atteint X R, le SL monte à Y R.
+lock_steps = [[0.6, -0.5], [1.0, 0.1], [1.5, 0.7], [2.0, 1.2]]
+trail_atr_mult = 1.2            # trailing ATR après TP1
+early_exit_bars = 12            # scalper : si après 12 bougies...
+early_exit_min_r = 0.3          # ...le trade n'a jamais atteint +0,3R, on sort
+max_bars = 48                   # durée max d'un trade (48 x M5 = 4 h)
+
+[strategy]
+min_score = 8                   # confluence minimale (sur 14) pour entrer
+swing_k = 3                     # taille des fractales pour les swings
+sweep_lookback = 3              # balayage de liquidité dans les 3 dernières bougies
+min_sl_atr = 0.6                # SL jamais plus serré que 0,6 ATR (bruit)
+max_sl_atr = 2.5                # SL trop large = setup ignoré
+sl_buffer_atr = 0.15
+min_room_r = 1.2                # il faut au moins 1,2R de place avant la prochaine liquidité HTF
+max_spread_atr = 0.15           # spread > 15 % de l'ATR = pas de trade
+signal_cooldown_bars = 6        # pas de nouveau signal sur le même actif pendant 30 min
+
+# Fenêtres d'annonces économiques (UTC) où le bot n'ouvre rien : NFP, CPI, FOMC...
+# Format "AAAA-MM-JJ HH:MM". Le bot bloque 30 min avant et 30 min après.
+news_blackout = []
+news_blackout_minutes = 30
+
+# --- Actifs ------------------------------------------------------------------
+# name : nom chez le broker. group : groupe de corrélation.
+# sessions : heures UTC autorisées pour ouvrir (London + New York pour l'or).
+# ref : actif de référence inter-marché (sign = 1 corrélé, -1 inversé).
+
+[[symbols]]
+name = "XAUUSD"
+group = "gold"
+sessions = [[7, 17]]
+no_new_trades_friday_after = 19
+spread = 0.25                   # spread typique (paper / backtest), en prix
+commission_per_lot = 7.0        # aller-retour, en devise du compte
+contract_size = 100             # 1 lot = 100 oz (paper / backtest uniquement)
+volume_step = 0.01
+volume_min = 0.01
+
+[[symbols]]
+name = "BTCUSD"
+group = "crypto"
+sessions = [[0, 24]]
+spread = 15.0
+commission_per_lot = 0.0
+contract_size = 1
+volume_step = 0.01
+volume_min = 0.01
+
+[[symbols]]
+name = "ETHUSD"
+group = "crypto"
+sessions = [[0, 24]]
+ref = { name = "BTCUSD", sign = 1 }
+spread = 1.5
+commission_per_lot = 0.0
+contract_size = 1
+volume_step = 0.01
+volume_min = 0.01
+
+[mt5]
+# Chemin du terminal MT5 (Windows). Identifiants dans .env : MT5_LOGIN, MT5_PASSWORD, MT5_SERVER.
+path = "C:/Program Files/MetaTrader 5/terminal64.exe"
+magic = 770077
+deviation_points = 30
+
+[ccxt]
+# Exchange crypto (perpétuels USDT). Clés dans .env : CCXT_API_KEY, CCXT_API_SECRET.
+exchange = "bybit"
+testnet = true
+default_type = "swap"
+# Correspondance nom du bot -> symbole ccxt
+symbol_map = { BTCUSD = "BTC/USDT:USDT", ETHUSD = "ETH/USDT:USDT" }
+
+[telegram]
+# Notifications facultatives. Variables .env : TELEGRAM_TOKEN, TELEGRAM_CHAT_ID.
+enabled = false

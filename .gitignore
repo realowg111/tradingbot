@@ -3,3 +3,7 @@ __pycache__/
 .env
 *.session
 scripts/hedge_backtest/results.csv
+config.toml
+state/
+data/
+.pytest_cache/
