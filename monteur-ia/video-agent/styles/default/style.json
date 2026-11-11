@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "name": "default",
+  "font": {
+    "family": "system-ui, -apple-system, Segoe UI, Helvetica Neue, Arial, sans-serif"
+  },
+  "display": {
+    "font": "system-ui, -apple-system, Segoe UI, Helvetica Neue, Arial, sans-serif",
+    "weight": 800,
+    "text": "system-ui, -apple-system, Segoe UI, Helvetica Neue, Arial, sans-serif",
+    "title": "ink2",
+    "flat": true
+  },
+  "captions": {
+    "style": "band",
+    "font": "JetBrains Mono",
+    "weight": 800,
+    "size": 60,
+    "maxWords": 3,
+    "upper": true,
+    "bg": "#111111",
+    "color": "#FFFFFF",
+    "radius": 0.2,
+    "shadow": true,
+    "tracking": -0.02,
+    "straddle": true
+  },
+  "layout": {
+    "frame": {
+      "bleed": true,
+      "r": 0
+    },
+    "seam": 1160
+  }
+}
