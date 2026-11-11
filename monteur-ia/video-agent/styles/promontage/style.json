@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "name": "promontage",
+  "colors": {
+    "paper": "#201B13",
+    "ink": "#F3EEE4",
+    "accent": "#D8B46A",
+    "ink2": "#E8E1D3",
+    "ink3": "#9C9383"
+  },
+  "font": {
+    "family": "Inter"
+  },
+  "display": {
+    "font": "Instrument Serif",
+    "weight": "italic 400",
+    "text": "Inter",
+    "flat": true
+  },
+  "paper": {
+    "bg": "flat"
+  },
+  "captions": {
+    "style": "stack",
+    "font": "Inter",
+    "weight": 600,
+    "size": 48,
+    "color": "#FFFFFF",
+    "big": 2.5,
+    "bigFont": "Instrument Serif",
+    "bigWeight": "italic 400",
+    "bigUpper": false,
+    "bigColor": "#D8B46A",
+    "stretch": "normal",
+    "align": "left",
+    "margin": 72,
+    "stagger": 0,
+    "smallW": 720,
+    "keyMin": 5,
+    "fullY": 330,
+    "paperY": 330,
+    "paperScale": 1,
+    "paperColor": "#FFFFFF",
+    "maxWords": 5,
+    "bigH": 1.0
+  },
+  "layout": {
+    "seam": 0
+  },
+  "zoom": {
+    "drift": 0.004
+  },
+  "grade": "eq=contrast=1.08:brightness=-0.02:saturation=0.95:gamma=1.0,vignette=angle=PI/4.5,unsharp=5:5:0.4:5:5:0",
+  "mix": {
+    "music": -30,
+    "duck": 0.5
+  },
+  "notes": [
+    "ProMontage = hybride de default, masaabrrr et kevinqvd. Accent doré #D8B46A partout.",
+    "Caméra plein écran tout le long (masaabrrr), image sombre et douce (kevinqvd).",
+    "Sous-titres en haut à gauche : petit sans blanc mot à mot + mot clé en grand serif italique doré (kevinqvd).",
+    "Accroche sur fond brun sombre : une ligne en sans gras blanc + une ligne en serif italique dorée.",
+    "Chaque info = board layer 'over' : glass dark plein cadre (caméra floutée et sombre, masaabrrr), titre 2 lignes en haut (blanc + mot clé doré), compteur / points directement sur le fond flouté (pas de carte : illisible sur fond sombre).",
+    "Pendant un board flouté, les sous-titres descendent sous la carte : captions.yKeys [[from, 1480], [to, 330]].",
+    "Tampons (stamp) dorés sur 1 à 3 moments forts max, posés sur la poitrine (y ≈ 1560), jamais sur le visage, avec un 'thud' discret (default). Aucun autre bruitage.",
+    "Musique douce sous la voix (enquete, arpege ou thriller selon l'émotion), jamais la même que la vidéo précédente.",
+    "Liste finale (problèmes, étapes) : sur fond sombre plein cadre, titre sans + serif italique doré, lignes icône + texte."
+  ]
+}
