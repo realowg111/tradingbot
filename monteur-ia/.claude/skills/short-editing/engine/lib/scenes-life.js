@@ -502,7 +502,8 @@ const DRAW = {
     shadow(ctx, 0, 0, w, h, r, 44, .2, 16); ctx.restore();
     if (sw > 0 && sh > 0) { ctx.save(); ctx.beginPath(); ctx.roundRect(0, 0, w, h, r); ctx.clip(); ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.filter = `blur(${Math.round((it.blur ?? 22) * m.a)}px)`; ctx.drawImage(cv, sx, sy, sw, sh, sx, sy, sw, sh); ctx.restore(); }
-    ctx.beginPath(); ctx.roundRect(0, 0, w, h, r); ctx.fillStyle = `rgba(250,249,246,${it.tint ?? .62})`; ctx.fill();
+    ctx.beginPath(); ctx.roundRect(0, 0, w, h, r); ctx.fillStyle = it.dark ? `rgba(14,10,14,${it.tint ?? .55})` : `rgba(250,249,246,${it.tint ?? .62})`; ctx.fill();
+    if (it.dark) return;   // dark: blurred, darkened backdrop with no hairline (masaabrrr look)
     ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.stroke();
     ctx.beginPath(); ctx.roundRect(-1, -1, w + 2, h + 2, r + 1); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(20,22,27,.08)'; ctx.stroke();
   },

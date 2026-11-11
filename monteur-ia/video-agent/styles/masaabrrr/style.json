@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "name": "masaabrrr",
+  "colors": {
+    "paper": "#EFEDEA",
+    "ink": "#2A2A2E",
+    "accent": "#F0454B"
+  },
+  "font": {
+    "family": "Inter"
+  },
+  "display": {
+    "font": "Inter",
+    "weight": 800,
+    "text": "Inter",
+    "flat": true
+  },
+  "paper": {
+    "bg": "clean"
+  },
+  "captions": {
+    "style": "stack",
+    "font": "Inter",
+    "weight": 900,
+    "size": 46,
+    "big": 2.6,
+    "stretch": "normal",
+    "smallW": 420,
+    "stagger": 0,
+    "fullY": 1330,
+    "paperY": 1330,
+    "color": "#FFFFFF",
+    "maxWords": 3,
+    "snap": false,
+    "bigUpper": false,
+    "bigFont": "Inter",
+    "bigWeight": 900
+  },
+  "layout": {
+    "seam": 0
+  },
+  "zoom": {
+    "drift": 0.004
+  },
+  "grade": "eq=contrast=1.06:saturation=1.05:gamma=1.02,vignette=angle=PI/4.5,unsharp=5:5:0.4:5:5:0",
+  "mix": {
+    "music": -31,
+    "duck": 0.5
+  },
+  "notes": [
+    "Caméra plein écran toute la vidéo, très peu de coupes (4 en 88 s), aucun fondu.",
+    "Sous-titres : un gros mot blanc à la fois, les mots voisins en petit au-dessus ou en dessous, ombre douce, sous le visage.",
+    "Quand une info s'affiche : la caméra derrière devient floue et sombre (glass dark plein cadre), titre blanc de 2 lignes en haut avec le mot clé en rouge, cartes blanches arrondies au milieu.",
+    "Accent rouge corail #F0454B sur les mots clés uniquement.",
+    "Son : une musique discrète et continue sous la voix, aucun bruitage sur les coupes ni sur les entrées."
+  ]
+}
