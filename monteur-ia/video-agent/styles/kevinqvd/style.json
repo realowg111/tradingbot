@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "name": "kevinqvd",
+  "colors": {
+    "paper": "#201B13",
+    "ink": "#F3EEE4",
+    "accent": "#D8B46A",
+    "ink2": "#E8E1D3",
+    "ink3": "#9C9383"
+  },
+  "font": {
+    "family": "Inter"
+  },
+  "display": {
+    "font": "Instrument Serif",
+    "weight": "italic 400",
+    "text": "Inter",
+    "flat": true
+  },
+  "paper": {
+    "bg": "flat"
+  },
+  "captions": {
+    "style": "stack",
+    "font": "Inter",
+    "weight": 600,
+    "size": 48,
+    "color": "#FFFFFF",
+    "big": 2.5,
+    "bigFont": "Instrument Serif",
+    "bigWeight": "italic 400",
+    "bigUpper": false,
+    "bigColor": "#D8B46A",
+    "stretch": "normal",
+    "align": "left",
+    "margin": 72,
+    "stagger": 0,
+    "smallW": 720,
+    "keyMin": 5,
+    "fullY": 330,
+    "paperY": 330,
+    "paperScale": 1,
+    "paperColor": "#FFFFFF",
+    "maxWords": 5,
+    "bigH": 1.0
+  },
+  "layout": {
+    "seam": 0
+  },
+  "zoom": {
+    "drift": 0.004
+  },
+  "grade": "eq=contrast=1.1:brightness=-0.035:saturation=0.92:gamma=0.98,vignette=angle=PI/4,unsharp=5:5:0.4:5:5:0",
+  "mix": {
+    "music": -30,
+    "duck": 0.5
+  },
+  "notes": [
+    "Caméra plein écran, image sombre et douce (pièce peu éclairée), coupe franche toutes les ~3 s (21 coupes en 68 s).",
+    "Sous-titres en HAUT À GAUCHE : la phrase se construit mot à mot en petit sans-serif blanc, le mot clé arrive en grand serif italique doré (#D8B46A) dessous.",
+    "Plans d'écran et B-roll en plein cadre entre les plans face caméra, sous-titres alors en bas.",
+    "Ouverture : titre 'sans + serif italique' sur fond sombre doré.",
+    "Son : musique douce sous la voix, pas de bruitages."
+  ]
+}

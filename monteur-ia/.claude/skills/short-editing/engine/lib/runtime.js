@@ -323,7 +323,7 @@ export async function boot() {
   const normW = s => String(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
   const bare = s => String(s).replace(/^[«"“'(]+|[.,!?;:…»"”')]+$/g, '');
   const stackCache = new Map(), SBIG = SCS * (scap.big || 3.2), OUT = scap.outline, OUT_END = OUT ? OUT.until ?? chunks[0]?.end ?? 0 : -1;
-  const TALL = scap.tall || 1, SDISP = !!scap.smallDisplay, BB = !!scap.bigBlock, BLUR = !!scap.blurIn, BH = BB ? 1.04 : .8;
+  const TALL = scap.tall || 1, SDISP = !!scap.smallDisplay, BB = !!scap.bigBlock, BLUR = !!scap.blurIn, BH = BB ? 1.04 : scap.bigH ?? .8;   // captions.bigH: room under a big word (a serif italic needs ~1)
   const fSmall = () => { if (SDISP) return fBig(SCS); ctx.font = K.font(SCS, SWT, SCF); ctx.fontStretch = 'normal'; ctx.letterSpacing = -SCS * .04 + 'px'; };
   const fBig = sz => { ctx.font = `${BIGW} ${sz}px ${BIGF}`; ctx.fontStretch = scap.stretch || 'extra-condensed'; ctx.letterSpacing = -sz * .02 + 'px'; };
   function stackLayout(c, paper) {
@@ -388,11 +388,11 @@ export async function boot() {
     if (onCam) { ctx.shadowColor = 'rgba(0,0,0,.38)'; ctx.shadowBlur = SCS * .3; ctx.shadowOffsetY = SCS * .04; }
     const ga = ctx.globalAlpha;
     for (const l of L.lines) {
-      const base = top + l.y + (l.big ? l.big * (BB ? .88 : .76) : SCS * .8) * TALL, x0 = l.big ? 0 : W / 2 - l.width / 2 + l.dx;
+      const base = top + l.y + (l.big ? l.big * (BB ? .88 : .76) : SCS * .8) * TALL, LX = scap.align === 'left' ? (scap.margin ?? 90) : null, x0 = l.big ? 0 : LX ?? W / 2 - l.width / 2 + l.dx;
       if (l.big) fBig(l.big); else fSmall();
       for (const it of l.items) {
         const p = BLUR ? S(t - it.w.start + .03, 28) : scap.snap ? (t >= it.w.start - .03 ? 1 : 0) : S(t - it.w.start + .03, 40); if (p <= .002) continue;
-        const x = l.big ? W / 2 - l.width / 2 + l.dx + it.x : x0 + it.x, k = l.big && !BLUR ? lerp(1.12, 1, p) : 1;
+        const x = l.big ? (LX ?? W / 2 - l.width / 2 + l.dx) + it.x : x0 + it.x, k = l.big && !BLUR ? lerp(1.12, 1, p) : 1;
         if (BLUR && p < .998) ctx.filter = `blur(${((1 - p) * (l.big || SCS) * .12).toFixed(2)}px)`;
         ctx.globalAlpha = ga * Math.min(1, p * 1.6);
         if (k !== 1) { ctx.save(); ctx.translate(W / 2, base - l.big * .36); ctx.scale(k, k); ctx.translate(-W / 2, -(base - l.big * .36)); }
@@ -405,7 +405,8 @@ export async function boot() {
           const tw = ctx.measureText(it.text).width, px = l.big * .12;
           ctx.save(); ctx.fillStyle = C.blue; ctx.beginPath(); ctx.roundRect(x - px, base - l.big * .84, tw + 2 * px, l.big * .98, l.big * .12); ctx.fill();
           ctx.shadowColor = 'transparent'; ctx.fillStyle = C.onBlue; ctx.fillText(it.text, x, base); ctx.restore();
-        } else ctx.fillText(it.text, x, base);
+        } else if (l.big && scap.bigColor) { ctx.save(); ctx.fillStyle = scap.bigColor; ctx.fillText(it.text, x, base); ctx.restore(); }   // captions.bigColor: the big key word in its own color
+        else ctx.fillText(it.text, x, base);
         ctx.filter = 'none';
         if (TALL !== 1) ctx.restore();
         if (k !== 1) ctx.restore();
