@@ -13,3 +13,19 @@ video-agent/takes/
 video-agent/edits/
 !*/.gitkeep
 video-agent/.tmp/
+# Liens vers les outils installés hors du repo (/home/user/tools), recréés à l'installation
+.claude/skills/video-use
+.claude/skills/manim-composer
+.claude/skills/manimce-best-practices
+.claude/skills/manimgl-best-practices
+.claude/skills/behind-the-person
+.claude/skills/explainer
+.claude/skills/orbit-reel
+.claude/skills/picture-stack
+.claude/skills/ranking-list
+.claude/skills/scene-switch
+.claude/skills/shape-shift
+.claude/skills/split-screen
+.claude/skills/storytelling
+.claude/skills/trial-reels
+.claude/skills/visual-notes
