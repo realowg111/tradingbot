@@ -1,0 +1,14 @@
+# Fichiers générés par engine/setup.mjs (recréés à l'installation)
+.claude/skills/short-editing/.runtime/
+.claude/skills/short-editing/assets/music/*.mp3
+.claude/skills/short-editing/assets/icons/*.png
+.claude/skills/short-editing/assets/icons/glyph/
+node_modules/
+.DS_Store
+# Vidéos (trop lourdes pour git)
+A-roll/*
+Références/*
+Exports/*
+video-agent/takes/
+video-agent/edits/
+!*/.gitkeep
