@@ -12,3 +12,4 @@ Exports/*
 video-agent/takes/
 video-agent/edits/
 !*/.gitkeep
+video-agent/.tmp/
