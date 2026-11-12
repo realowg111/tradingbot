@@ -83,3 +83,24 @@ Reconstruction : chaque indicateur directionnel vote +1, -1 ou 0 sur des bougies
 Sur 108 réglages (seuil 6/8/10 votes, objectif 0,3/0,5/1 ATR, stop 0,5/1/2 ATR, durée 30 min ou 2 h, les deux lectures), aucun n'est positif, sur aucune période, même avec des frais ECN. Le réglage au plus fort taux de réussite gagne 85 % de ses trades, avec un Sharpe d'environ -11.
 
 Conclusion : ce scalper gagne souvent mais perd de l'argent, et il perd même sans aucun frais. Son taux de réussite élevé vient seulement d'un objectif petit et d'un stop large. Les résultats de la vidéo (40 trades sur une journée) relèvent de la chance ou de la sélection, et ne montrent pas un avantage réel.
+
+## Robots de tendance sur l'or (`python3 gold_trend_backtest.py [données] [graphique.png]`)
+
+Ces robots gardent leurs positions quelques jours à quelques semaines. Ils sont testés sur les clôtures quotidiennes de 2009 à 2026, avec 0,02 % de frais par transaction et un swap CFD de 0,01 %/jour sur toute position tenue. Les paramètres sont des valeurs classiques, fixées à l'avance.
+
+| Robot | CAGR | Max DD | Sharpe | Pire année | Temps investi | CAGR 09-17 | CAGR 18-26 | CAGR frais ×3 |
+|---|---|---|---|---|---|---|---|---|
+| Achat-conservation or (CFD) | +6,0 % | -53 % | 0,44 | -31 % | 100 % | +0,3 % | +12,6 % | -1,5 % |
+| **TSMOM long seul, vol 15 %** | **+5,9 %** | **-28 %** | **0,58** | **-8 %** | 44 % | +2,6 % | +9,3 % | +2,1 % |
+| SMA 50/200 long seul | +5,7 % | -44 % | 0,50 | -14 % | 63 % | -0,1 % | +11,8 % | +0,6 % |
+| Donchian 55/20 long seul | +4,8 % | -28 % | 0,50 | -11 % | 38 % | +0,9 % | +9,1 % | +1,7 % |
+| TSMOM long/short | +4,4 % | -42 % | 0,39 | -14 % | 65 % | +1,5 % | +7,3 % | -1,2 % |
+| Donchian 55/20 long/short | +0,3 % | -54 % | 0,08 | -21 % | 60 % | -3,4 % | +4,3 % | -4,4 % |
+
+Robustesse de TSMOM long seul : les 15 réglages testés (fenêtres de 1 à 12 mois, volatilité cible de 10 à 20 %) sont tous positifs, avec un Sharpe de 0,38 à 0,62.
+
+Sans swap, c'est-à-dire en tradant via des futures ou un ETF plutôt qu'un CFD : achat-conservation +9,9 %/an (max DD -45 %), TSMOM long seul +7,8 %/an (max DD -25 %).
+
+Conclusion : le seul robot qui tient est TSMOM long seul. Il ne gagne pas plus que de garder de l'or, mais il divise par deux la perte maximale (-28 % contre -53 %) et sa pire année est à -8 % au lieu de -31 %. Il reste dehors pendant les baisses (2013, 2015), puis rate une partie des rebonds. Il a fini 7 années sur 17 en positif : les gains arrivent en quelques grosses années (2010, 2011, 2019, 2024, 2025). Le swap CFD coûte environ 3,5 %/an à toute position longue sur l'or.
+
+![Courbes d'équité](gold_trend.png)
