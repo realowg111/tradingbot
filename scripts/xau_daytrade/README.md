@@ -66,3 +66,20 @@ Aucune de ces stratégies ne mérite d'y mettre du capital.
 Ce qui a fonctionné dans ce dépôt, ce sont les stratégies de tendance en swing (voir `../hedge_backtest`, TSMOM), pas le day trading.
 
 Limites : prix bid HistData uniquement, glissement modélisé par un coût fixe, pas d'impact des annonces macro sur le spread. Ces limites jouent toutes contre les stratégies, pas en leur faveur.
+
+## Le scalper « HFT STR – Neural Core » vu sur TikTok (`python3 scalper_backtest.py`)
+
+Une vidéo montre un robot MT5 (courtier Xlence) qui scalpe XAUUSD avec 78 à 88 % de trades gagnants. Son tableau de bord combine 12 indicateurs : RSI 14, tendance H1, écart à la MM, MACD, structure, Bollinger, volatilité, VWAP, momentum 5 et 15, cassure, alignement. Il trade quand « 8/12 signaux » sont alignés.
+
+Reconstruction : chaque indicateur directionnel vote +1, -1 ou 0 sur des bougies de 5 minutes, soit 10 votes (la volatilité et l'alignement ne donnent pas de sens). On entre quand au moins 8 votes vont dans le même sens. Sorties de scalper : objectif 0,5 ATR, stop 1,5 ATR, 1 heure maximum. Fenêtre de 03h00 à 16h55 (New York). On teste aussi la lecture inverse, qui joue contre les signaux.
+
+| Lecture | Frais | Trades/jour | Gagnants | PF | CAGR (1x) | Sharpe 09-17 | Sharpe 18-26 |
+|---|---|---|---|---|---|---|---|
+| Suivre les signaux | sans frais | 21 | 71 % | 0,88 | -21 % | -4,4 | -2,6 |
+| Suivre les signaux | ECN | 21 | 71 % | 0,69 | -46 % | -10,0 | -9,0 |
+| Contre les signaux | sans frais | 20 | 73 % | 0,94 | -10 % | -2,0 | -1,1 |
+| Contre les signaux | ECN | 20 | 73 % | 0,74 | -37 % | -7,7 | -6,9 |
+
+Sur 108 réglages (seuil 6/8/10 votes, objectif 0,3/0,5/1 ATR, stop 0,5/1/2 ATR, durée 30 min ou 2 h, les deux lectures), aucun n'est positif, sur aucune période, même avec des frais ECN. Le réglage au plus fort taux de réussite gagne 85 % de ses trades, avec un Sharpe d'environ -11.
+
+Conclusion : ce scalper gagne souvent mais perd de l'argent, et il perd même sans aucun frais. Son taux de réussite élevé vient seulement d'un objectif petit et d'un stop large. Les résultats de la vidéo (40 trades sur une journée) relèvent de la chance ou de la sélection, et ne montrent pas un avantage réel.
