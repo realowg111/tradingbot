@@ -21,20 +21,20 @@
 //| arret jusqu'au lendemain a -8 % sur le jour.                     |
 //| Options desactivees par defaut : TrendFilter, MaxBurstMinutes.   |
 //+------------------------------------------------------------------+
-#property version "1.40"
+#property version "1.50"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
 input int    LookbackSeconds = 20;   // Mouvement regarde pour choisir le sens (contre-courant)
-input double MarginUse      = 0.70;  // Part du solde utilisee en marge par la rafale (0.70 comme le live)
+input double MarginUse      = 0.85;  // Part du solde utilisee en marge par la rafale (live 0.70 ; ici 0.85 = lots plus gros)
 input double StartClosePct  = 3.0;   // Debut des fermetures quand la rafale gagne x % du solde
 input int    CloseEveryMs   = 700;   // Une fermeture toutes les N millisecondes
 input double EmergencyPct   = 0.0;   // Arret d'urgence a -x % du solde (0 = aucun, comme le live)
 
 input bool   TrendFilter    = false; // Option : contre-courant seulement dans le sens de la tendance de fond (EMA 50 H1)
-input double ReduceStep1Pct = 2.0;   // Protection 2 : a -x % ferme la plus grosse position (0 = off)
-input double ReduceStep2Pct = 3.5;   // ... a -x % ferme la plus grosse restante
-input double CloseAllPct    = 5.0;   // ... a -x % ferme tout ce qui reste
+input double ReduceStep1Pct = 0.5;   // Reduction : a -x % (spread d'ouverture non compte) ferme la plus grosse position (0 = off)
+input double ReduceStep2Pct = 1.0;   // ... a -x % ferme la plus grosse restante
+input double CloseAllPct    = 1.5;   // ... a -x % ferme tout ce qui reste
 input int    MaxBurstMinutes = 0;    // Option : ferme la rafale si elle n'est pas en gain apres N minutes (0 = off)
 input int    LossStreak     = 3;     // Apres N rafales perdantes d'affilee...
 input int    StreakPauseSec = 15;    // ...pause de N secondes (0 = off)
@@ -61,6 +61,7 @@ int      lastSide = 0;
 double   startBalance = 0;
 int      bursts = 0;
 int      reduceStage = 0;          // paliers de reduction deja appliques a la rafale
+double   spreadCost = 0;           // cout du spread a l'ouverture de la rafale (en devise du compte)
 int      hTrend = INVALID_HANDLE;
 int      hRSI = INVALID_HANDLE, hMACD = INVALID_HANDLE, hEMA20 = INVALID_HANDLE, hEMAH1 = INVALID_HANDLE, hBB = INVALID_HANDLE;
 int      score = 0;                // score des 12 indicateurs (-10 .. +10)
@@ -196,6 +197,10 @@ void OpenBurst(int side)
    startBalance = balance;
    worst = 0;
    reduceStage = 0;
+   spreadCost = 0;
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double spreadNow = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
    int opened = 0;
    for(int i = 0; i < 7; i++)
    {
@@ -206,7 +211,11 @@ void OpenBurst(int side)
       bool ok;
       if(side > 0) ok = trade.Buy(v, _Symbol, 0, 0, 0, "LiveTikTok");
       else ok = trade.Sell(v, _Symbol, 0, 0, 0, "LiveTikTok");
-      if(ok) opened++;
+      if(ok)
+      {
+         opened++;
+         if(tickSize > 0) spreadCost += spreadNow / tickSize * tickValue * v;
+      }
       else lastError = IntegerToString((int)trade.ResultRetcode()) + " " + trade.ResultComment();
    }
    if(opened > 0)
@@ -397,17 +406,19 @@ void Step()
    }
 
    // protection 2 : reduction de la rafale, la plus grosse position d'abord
+   // (le spread paye a l'ouverture n'est pas compte : seul le mouvement du prix declenche les paliers)
+   double movePct = 100.0 * (profit + spreadCost) / startBalance;
    if(phase >= 1)
    {
-      if(CloseAllPct > 0 && pct <= -CloseAllPct)
+      if(CloseAllPct > 0 && movePct <= -CloseAllPct)
       {
          CloseAll();
          lastEvent = "limite de la rafale " + DoubleToString(pct, 1) + " % : tout ferme";
          Print(lastEvent);
          return;
       }
-      if(reduceStage == 0 && ReduceStep1Pct > 0 && pct <= -ReduceStep1Pct) { reduceStage = 1; CloseBiggest("reduction 1"); return; }
-      if(reduceStage == 1 && ReduceStep2Pct > 0 && pct <= -ReduceStep2Pct) { reduceStage = 2; CloseBiggest("reduction 2"); return; }
+      if(reduceStage == 0 && ReduceStep1Pct > 0 && movePct <= -ReduceStep1Pct) { reduceStage = 1; CloseBiggest("reduction 1"); return; }
+      if(reduceStage == 1 && ReduceStep2Pct > 0 && movePct <= -ReduceStep2Pct) { reduceStage = 2; CloseBiggest("reduction 2"); return; }
       // protection 3 : duree maximale sans gain
       if(MaxBurstMinutes > 0 && now - phaseStart >= (ulong)MaxBurstMinutes * 60000 && profit <= 0)
       {
@@ -476,6 +487,8 @@ void OnTimer()
            " (confiance min ", DoubleToString(MinConfidence, 0), " %)",
            "\nMouvement du prix sur ", LookbackSeconds, " s : ", DoubleToString(PriceMove(LookbackSeconds), 2),
            "   tendance de fond : ", (TrendSide() > 0 ? "HAUSSIERE (achats sur les creux)" : (TrendSide() < 0 ? "BAISSIERE (ventes sur les rebonds)" : "-")),
+           "\nSpread paye a l'ouverture de la rafale : ", DoubleToString(spreadCost, 2),
+           (startBalance > 0 ? " (" + DoubleToString(100.0 * spreadCost / startBalance, 2) + " % du solde)" : ""),
            "\nProtections : reduction a -", DoubleToString(ReduceStep1Pct, 1), " % / -", DoubleToString(ReduceStep2Pct, 1),
            " %, tout ferme a -", DoubleToString(CloseAllPct, 1), " %, duree max ", MaxBurstMinutes, " min",
            "\nNiveau de marge : ", (ml > 0 ? DoubleToString(ml, 0) + " %" : "-"),
