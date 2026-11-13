@@ -83,18 +83,37 @@ Même procédure que le robot Noise Boundary :
 2. Le compiler avec F7 dans MetaEditor.
 3. Le glisser sur un graphique M1 (XAUUSD, US100…) et activer **Algo Trading**.
 
+## Les deux modes (paramètre `Preset`)
+
+| | **TENDANCE** (par défaut) | **VIDEO** |
+|---|---|---|
+| Idée | Ce que nos backtests ont appris | Le comportement observé dans la vidéo |
+| Direction | Seulement dans le sens de la tendance du jour (noise boundary, séance de New York) | Les deux sens |
+| Entrée | Repli sur l'EMA9 puis reprise, confirmé par au moins 6 votes sur 10 | 8 votes sur 10, analyse à chaque tick |
+| Stop | Sous le dernier creux (5 bougies) | 1,5 ATR |
+| Objectif | 5 fois le risque | 0,2 ATR (minuscule, touché en quelques secondes) |
+| Durée max | 2 h | 30 min |
+| Heures | 10h–12h New York (16h–18h Paris) | Toutes |
+| Positions | 1 à la fois | Jusqu'à 5, rapprochées ; tailles croissantes avec `LotProgression` > 1 (grille) |
+
+Résultats Python de référence (Nasdaq 2014–2024, frais réels, 0,5 % de risque par trade) :
+- TENDANCE (version sans filtre de votes) : environ -3,6 %/an, 182 trades/an. C'est le meilleur des scalps testés, mais il reste négatif.
+- VIDEO : perte nette sur l'or et l'EUR/USD de 2009 à 2026, même sans frais.
+
+Le testeur MT5 en ticks réels chez votre courtier donnera le verdict final.
+
+`PERSONNALISE` (Preset = CUSTOM) : tous les paramètres ci-dessous sont utilisés tels quels.
+
 ## Réglages principaux
 
 | Paramètre | Défaut | Rôle |
 |---|---|---|
-| `MinVotes` | 8 | Votes alignés requis sur 10 |
-| `TP_ATR` / `SL_ATR` | 0,5 / 1,5 | TP proche et SL plus loin, comme le profil de la vidéo (beaucoup de petits gains). Essayer aussi 1,0 / 1,0. |
-| `RiskPerTradePct` | 2 | Risque par trade en % de l'équité (ou `FixedLot`) |
-| `MaxPositions` | 5 | Positions simultanées dans le même sens |
-| `MaxHoldMinutes` | 60 | Fermeture forcée après N minutes |
-| `CloseOnOpposite` | true | Ferme les positions si le signal s'inverse |
+| `Preset` | TENDANCE | TENDANCE, VIDEO ou CUSTOM |
+| `RiskPerTradePct` | 1 | Risque par trade en % de l'équité (ou `FixedLot`) |
+| `LotProgression` | 1 (désactivé) | Grille : taille × facteur à chaque position ajoutée. Mode VIDEO seulement, en démo. |
 | `DailyStopPct` | 0 (désactivé) | Arrêt pour la journée au-delà de x % de perte |
-| `CycleOnEveryTick` | false | true = analyse à chaque tick au lieu de chaque minute |
+| `ServerMinusNY` | 7 | Décalage serveur − New York, utilisé dans le testeur (le robot le détecte seul en démo et en réel) |
+| Autres | — | Utilisés seulement en mode CUSTOM |
 
 ## Test conseillé
 
