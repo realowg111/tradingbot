@@ -37,7 +37,6 @@
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
 #property version   "6.00"
-#property strict
 
 #include <Trade/Trade.mqh>
 
@@ -640,7 +639,7 @@ bool DayVWAP(double &vwap)
    double pv = 0, v = 0;
    for(int i = 0; i < n - 1; i++)
    {
-      double vol = (double)MathMax(r[i].tick_volume, 1);
+      double vol = (r[i].tick_volume > 0 ? (double)r[i].tick_volume : 1.0);
       pv += (r[i].high + r[i].low + r[i].close) / 3.0 * vol; v += vol;
    }
    vwap = pv / v;
@@ -859,7 +858,8 @@ void Panel()
          trades++; if(p > 0) { wins++; sw += p; } else sl += -p;
          if((datetime)HistoryDealGetInteger(t, DEAL_TIME) >= dayStart) today += p;
       }
-   double aw = wins ? sw / wins : 0, al = (trades - wins) ? sl / (trades - wins) : 0;
+   double aw = (wins > 0) ? sw / wins : 0.0;
+   double al = (trades - wins > 0) ? sl / (trades - wins) : 0.0;
    int y = 20, x = 10;
    Label("S12_t", x, y, "SCALPER 12 INDICATEURS  -  " + _Symbol + "  -  mode " + p_name, clrAqua, 11); y += 22;
    Label("S12_a", x, y, StringFormat("Solde %.2f   Equite %.2f   P&L jour %+.2f", bal, eq, today), clrWhite); y += 16;

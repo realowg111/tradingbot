@@ -15,7 +15,6 @@
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
 #property version   "1.00"
-#property strict
 
 #include <Trade/Trade.mqh>
 
@@ -231,7 +230,7 @@ bool TodayOpenAndVwap(double &openPx, double &vwap, double &lastClose, int uptoM
       if(mm < 0 || mm > uptoMinute) continue;
       if(mm == 0) { openPx = r[i].open; found = true; }
       double tp = (r[i].high + r[i].low + r[i].close) / 3.0;
-      double vol = (double)MathMax(r[i].tick_volume, 1);
+      double vol = (r[i].tick_volume > 0 ? (double)r[i].tick_volume : 1.0);
       pv += tp * vol; v += vol;
       lastClose = r[i].close;
    }

@@ -15,7 +15,6 @@
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
 #property version   "1.10"
-#property strict
 
 #include <Trade/Trade.mqh>
 
@@ -104,7 +103,7 @@ bool Read()
       double pv = 0, v = 0;
       for(int i = 0; i < n - 1; i++)
       {
-         double vol = (double)MathMax(day[i].tick_volume, 1);
+         double vol = (day[i].tick_volume > 0 ? (double)day[i].tick_volume : 1.0);
          pv += (day[i].high + day[i].low + day[i].close) / 3.0 * vol; v += vol;
       }
       vwap = pv / v;
@@ -213,7 +212,7 @@ void Manage()
    if(LossLimitPct > 0 && pct <= -LossLimitPct)     { CloseBasket(StringFormat("Limite de perte %+.2f%%", pct)); return; }
    if(LockStartPct > 0 && g_best >= LockStartPct && pct <= g_best * LockKeepPct / 100.0)
    { CloseBasket(StringFormat("Gain protege %+.2f%% (max %+.2f%%)", pct, g_best)); return; }
-   if(MaxMinutes > 0 && TimeCurrent() - g_openTime >= MaxMinutes * 60) { CloseBasket("Duree max"); return; }
+   if(MaxMinutes > 0 && (long)(TimeCurrent() - g_openTime) >= (long)MaxMinutes * 60) { CloseBasket("Duree max"); return; }
 }
 
 //+------------------------------------------------------------------+
@@ -270,7 +269,8 @@ void Panel()
    double bal = AccountInfoDouble(ACCOUNT_BALANCE), eq = AccountInfoDouble(ACCOUNT_EQUITY);
    Label("L12_t", x, y, "LIVE 12 INDICATEURS  -  " + _Symbol, clrAqua, 11); y += 22;
    Label("L12_a", x, y, StringFormat("Solde %.2f   Equite %.2f", bal, eq), clrWhite); y += 16;
-   double aw = g_basketWins ? g_sumWin / g_basketWins : 0, al = (g_baskets - g_basketWins) ? g_sumLoss / (g_baskets - g_basketWins) : 0;
+   double aw = (g_basketWins > 0) ? g_sumWin / g_basketWins : 0.0;
+   double al = (g_baskets - g_basketWins > 0) ? g_sumLoss / (g_baskets - g_basketWins) : 0.0;
    Label("L12_b", x, y, StringFormat("Rafales %d   gagnantes %d   gain moy %.2f   perte moy %.2f   total %+.2f",
          g_baskets, g_basketWins, aw, al, g_sumWin - g_sumLoss), g_sumWin >= g_sumLoss ? clrLime : clrOrangeRed); y += 16;
    Label("L12_s", x, y, g_status, clrYellow, 8); y += 20;
