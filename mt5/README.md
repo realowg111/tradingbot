@@ -174,3 +174,21 @@ Sur 1 000 €, gardez `RafaleLotScale` à 0,2 : une perte de 0,7 % (7 €) corre
 ## Test conseillé
 
 Dans le testeur de stratégies : modèle **« Chaque tick basé sur des ticks réels »**, XAUUSD et US100, 12 derniers mois, capital de 500. Comparez le résultat avec NoiseBoundaryUS100 sur la même période, et envoyez-moi les deux rapports.
+
+---
+
+# Robot simple : Scalper12Live (un seul comportement, celui du live)
+
+`Scalper12Live.mq5` est un robot à part, sans préréglage à choisir :
+1. Toutes les **5 secondes**, les 12 indicateurs votent et donnent la jauge ACHAT % / VENTE %.
+2. Dès que **7 votes sur 10** sont alignés, il ouvre une **rafale de 6 positions** (0,30 / 0,20 / 0,15 / 0,10 / 0,05 / 0,05 × `LotScale`), sans SL ni TP individuels.
+3. La rafale est gérée **comme un tout**, en % du solde :
+   - fermée à **+1 %** (objectif) ;
+   - fermée à **-0,7 %** (limite de perte : la perte est encaissée, petite et connue) ;
+   - si elle a atteint +0,5 % puis retombe sous la moitié de son meilleur gain, fermée pour protéger le gain ;
+   - fermée après 30 minutes ou si le signal s'inverse.
+4. Puis il recommence.
+
+Installation : copier le fichier dans `MQL5/Experts`, compiler (F7), le glisser sur **XAUUSD M1**, garder `LotScale` = 0,2 pour 1 000 €, activer **Trading Algo**. Retirez les autres robots de ce graphique.
+
+La ligne jaune du panneau dit à chaque calcul ce que fait le robot : votes, « attend : … », « RAFALE », ou l'état de la rafale ouverte. Si le trading automatique n'est pas autorisé, elle affiche « BLOQUE ». Si un ordre est refusé, le journal affiche le code et sa description.
