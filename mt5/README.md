@@ -62,3 +62,40 @@ Le robot a besoin d'environ un mois d'historique M1. Faites défiler le graphiqu
 - Glissement moyen par trade inférieur à 0,005 % du prix.
 - Gain moyen / perte moyenne autour de 1,9 et taux de réussite autour de 40 %, sur au moins 30 à 40 trades.
 - Au-delà, on peut passer en réel à la taille 0,5.
+
+---
+
+# Robot MT5 : Scalper 12 Indicateurs (style de la vidéo)
+
+`Scalper12Indicators.mq5` reproduit le robot de la vidéo TikTok :
+- **12 indicateurs** : RSI 14, tendance H1, écart à la MM20, MACD, structure, Bollinger, volatilité, VWAP, momentum 5 et 15, cassure, alignement. Dix d'entre eux votent haussier ou baissier.
+- **Jauge de confiance ACHAT % / VENTE %**, calculée à partir des votes.
+- **Exécution à chaque cycle** (chaque bougie M1, ou chaque tick en option) dès que 8 votes sur 10 sont alignés.
+- **TP et SL automatiques** en multiples de l'ATR, envoyés au courtier avec l'ordre. Jusqu'à 5 positions dans le même sens.
+- **Panneau à l'écran :** solde, équité, P&L du jour, taux de réussite, gain moyen comparé à la perte moyenne, espérance par trade, les 12 indicateurs avec leur vote, et un journal en direct.
+
+⚠️ **Avertissement :** la reconstruction de ces règles en Python (`scripts/xau_daytrade/scalper_backtest.py`) a perdu de l'argent sur l'or et l'EUR/USD de 2009 à 2026, avec les 108 réglages testés, même sans frais. Le testeur MT5 en ticks réels chez votre courtier dira la même chose ou non. À tester d'abord en compte démo. En réel, n'engagez que de l'argent que vous acceptez de perdre.
+
+## Installation
+
+Même procédure que le robot Noise Boundary :
+1. Copier le fichier dans `MQL5/Experts`.
+2. Le compiler avec F7 dans MetaEditor.
+3. Le glisser sur un graphique M1 (XAUUSD, US100…) et activer **Algo Trading**.
+
+## Réglages principaux
+
+| Paramètre | Défaut | Rôle |
+|---|---|---|
+| `MinVotes` | 8 | Votes alignés requis sur 10 |
+| `TP_ATR` / `SL_ATR` | 0,5 / 1,5 | TP proche et SL plus loin, comme le profil de la vidéo (beaucoup de petits gains). Essayer aussi 1,0 / 1,0. |
+| `RiskPerTradePct` | 2 | Risque par trade en % de l'équité (ou `FixedLot`) |
+| `MaxPositions` | 5 | Positions simultanées dans le même sens |
+| `MaxHoldMinutes` | 60 | Fermeture forcée après N minutes |
+| `CloseOnOpposite` | true | Ferme les positions si le signal s'inverse |
+| `DailyStopPct` | 0 (désactivé) | Arrêt pour la journée au-delà de x % de perte |
+| `CycleOnEveryTick` | false | true = analyse à chaque tick au lieu de chaque minute |
+
+## Test conseillé
+
+Dans le testeur de stratégies : modèle **« Chaque tick basé sur des ticks réels »**, XAUUSD et US100, 12 derniers mois, capital de 500. Comparez le résultat avec NoiseBoundaryUS100 sur la même période, et envoyez-moi les deux rapports.
