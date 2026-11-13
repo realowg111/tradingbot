@@ -796,7 +796,7 @@ void Label(string name, int x, int y, string text, color c, int size = 9)
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
    ObjectSetInteger(0, name, OBJPROP_COLOR, c);
-   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetString(0, name, OBJPROP_TEXT, StringLen(text) > 0 ? text : " ");   // an empty label shows "Label" in MT5
 }
 
 void Panel()
