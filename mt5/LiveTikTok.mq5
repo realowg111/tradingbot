@@ -21,7 +21,7 @@
 //| arret jusqu'au lendemain a -8 % sur le jour.                     |
 //| Options desactivees par defaut : TrendFilter, MaxBurstMinutes.   |
 //+------------------------------------------------------------------+
-#property version "1.50"
+#property version "1.60"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
@@ -36,6 +36,15 @@ input double ReduceStep1Pct = 0.5;   // Reduction : a -x % (spread d'ouverture n
 input double ReduceStep2Pct = 1.0;   // ... a -x % ferme la plus grosse restante
 input double CloseAllPct    = 1.5;   // ... a -x % ferme tout ce qui reste
 input int    MaxBurstMinutes = 0;    // Option : ferme la rafale si elle n'est pas en gain apres N minutes (0 = off)
+
+input double BankPct        = 1.0;   // Securisation : a +x % ferme la plus grosse position (gain en poche) (0 = off)
+input double LockPct        = 1.0;   // Verrou : des +x %, la rafale ne doit plus finir en perte (0 = off)
+input double FloorPct       = 0.2;   // Verrou : ferme tout si la rafale redescend a +x %
+input double BEBuffer       = 0.10;  // Verrou : stop chez le courtier au prix d'entree + x (prix de l'or, ex 0.10 $)
+input double TrailStartPct  = 1.5;   // Gain suiveur : actif des +x % (0 = off)
+input double TrailGiveback  = 40;    // Gain suiveur : ferme tout si on perd x % du meilleur gain
+input string NewsTimesParis = "14:30,16:00,20:00"; // Annonces (heure de Paris) : pas de nouvelle rafale autour
+input int    NewsWindowMin  = 5;     // Annonces : minutes avant et apres (0 = off)
 input int    LossStreak     = 3;     // Apres N rafales perdantes d'affilee...
 input int    StreakPauseSec = 15;    // ...pause de N secondes (0 = off)
 
@@ -62,6 +71,9 @@ double   startBalance = 0;
 int      bursts = 0;
 int      reduceStage = 0;          // paliers de reduction deja appliques a la rafale
 double   spreadCost = 0;           // cout du spread a l'ouverture de la rafale (en devise du compte)
+bool     banked = false;           // plus grosse position deja encaissee
+bool     locked = false;           // verrou de gain actif
+double   peakPct = 0;              // meilleur resultat de la rafale (% du solde)
 int      hTrend = INVALID_HANDLE;
 int      hRSI = INVALID_HANDLE, hMACD = INVALID_HANDLE, hEMA20 = INVALID_HANDLE, hEMAH1 = INVALID_HANDLE, hBB = INVALID_HANDLE;
 int      score = 0;                // score des 12 indicateurs (-10 .. +10)
@@ -198,6 +210,7 @@ void OpenBurst(int side)
    worst = 0;
    reduceStage = 0;
    spreadCost = 0;
+   banked = false; locked = false; peakPct = 0;
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double spreadNow = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -292,6 +305,72 @@ int TrendSide()
    return 0;
 }
 
+//--- heure de Paris (heure d'ete europeenne : dernier dimanche de mars -> dernier dimanche d'octobre, 01:00 UTC)
+datetime LastSunday(int year, int month)
+{
+   int ny = year, nm = month + 1;
+   if(month == 12) { ny = year + 1; nm = 1; }
+   datetime t = StringToTime(StringFormat("%04d.%02d.01 01:00", ny, nm)) - 86400;   // dernier jour du mois, 01:00
+   MqlDateTime d;
+   TimeToStruct(t, d);
+   return t - d.day_of_week * 86400;
+}
+
+datetime ParisNow()
+{
+   datetime gmt = TimeGMT();
+   MqlDateTime d; TimeToStruct(gmt, d);
+   bool summer = (gmt >= LastSunday(d.year, 3) && gmt < LastSunday(d.year, 10));
+   return gmt + (summer ? 7200 : 3600);
+}
+
+//--- vrai si on est a moins de NewsWindowMin minutes d'une annonce
+bool InNewsWindow()
+{
+   if(NewsWindowMin <= 0 || StringLen(NewsTimesParis) == 0) return false;
+   MqlDateTime p; TimeToStruct(ParisNow(), p);
+   int nowMin = p.hour * 60 + p.min;
+   string parts[];
+   int n = StringSplit(NewsTimesParis, ',', parts);
+   for(int i = 0; i < n; i++)
+   {
+      StringTrimLeft(parts[i]); StringTrimRight(parts[i]);
+      string hm[];
+      if(StringSplit(parts[i], ':', hm) != 2) continue;
+      int t = (int)StringToInteger(hm[0]) * 60 + (int)StringToInteger(hm[1]);
+      if(MathAbs(nowMin - t) <= NewsWindowMin) return true;
+   }
+   return false;
+}
+
+//--- verrou : stop chez le courtier au prix d'entree + BEBuffer sur chaque position
+void PlaceBreakEvenStops()
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double minDist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID), ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl = 0;
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+      {
+         sl = NormalizeDouble(open + BEBuffer, digits);
+         if(bid - sl <= minDist) continue;             // le prix n'est pas assez loin : verrou gere par le robot
+      }
+      else
+      {
+         sl = NormalizeDouble(open - BEBuffer, digits);
+         if(sl - ask <= minDist) continue;
+      }
+      trade.PositionModify(t, sl, PositionGetDouble(POSITION_TP));
+   }
+}
+
 void CloseAll()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -326,6 +405,7 @@ void Step()
          Print(lastEvent);
       }
       if(dayStopped) return;
+      if(InNewsWindow()) { lastEvent = "annonce economique proche : pas de nouvelle rafale"; return; }
       if(TimeTradeServer() < pauseUntil) { gaugeSum = 0; gaugeN = 0; flips = 0; return; }
 
       // lecture de la jauge pendant la pause (toutes les 250 ms)
@@ -401,6 +481,37 @@ void Step()
    {
       CloseAll();
       lastEvent = "arret d'urgence a " + DoubleToString(pct, 1) + " %";
+      Print(lastEvent);
+      return;
+   }
+
+   // securisation des gains (resultat total de la rafale, gains deja encaisses compris)
+   double totalPct = 100.0 * (AccountInfoDouble(ACCOUNT_EQUITY) - startBalance) / startBalance;
+   if(totalPct > peakPct) peakPct = totalPct;
+   if(!banked && BankPct > 0 && totalPct >= BankPct)
+   {
+      banked = true;
+      CloseBiggest("gain securise");
+      return;
+   }
+   if(!locked && LockPct > 0 && peakPct >= LockPct)
+   {
+      locked = true;
+      PlaceBreakEvenStops();
+      lastEvent = "verrou actif : stops au prix d'entree chez le courtier";
+      Print(lastEvent);
+   }
+   if(locked && totalPct <= FloorPct)
+   {
+      CloseAll();
+      lastEvent = "verrou : rafale fermee a " + DoubleToString(totalPct, 2) + " % (max " + DoubleToString(peakPct, 2) + " %)";
+      Print(lastEvent);
+      return;
+   }
+   if(TrailStartPct > 0 && peakPct >= TrailStartPct && totalPct <= peakPct * (1.0 - TrailGiveback / 100.0))
+   {
+      CloseAll();
+      lastEvent = "gain suiveur : rafale fermee a " + DoubleToString(totalPct, 2) + " % (max " + DoubleToString(peakPct, 2) + " %)";
       Print(lastEvent);
       return;
    }
@@ -487,6 +598,11 @@ void OnTimer()
            " (confiance min ", DoubleToString(MinConfidence, 0), " %)",
            "\nMouvement du prix sur ", LookbackSeconds, " s : ", DoubleToString(PriceMove(LookbackSeconds), 2),
            "   tendance de fond : ", (TrendSide() > 0 ? "HAUSSIERE (achats sur les creux)" : (TrendSide() < 0 ? "BAISSIERE (ventes sur les rebonds)" : "-")),
+           "\nSecurisation : ", (banked ? "plus grosse position encaissee" : "en attente de +" + DoubleToString(BankPct, 1) + " %"),
+           "   verrou : ", (locked ? "ACTIF (fermeture a +" + DoubleToString(FloorPct, 1) + " %)" : "inactif"),
+           "   meilleur gain de la rafale : ", DoubleToString(peakPct, 2), " %",
+           "\nAnnonces : ", (InNewsWindow() ? "FENETRE D'ANNONCE (pas de nouvelle rafale)" : "rien a proximite"),
+           "   heure de Paris : ", TimeToString(ParisNow(), TIME_MINUTES),
            "\nSpread paye a l'ouverture de la rafale : ", DoubleToString(spreadCost, 2),
            (startBalance > 0 ? " (" + DoubleToString(100.0 * spreadCost / startBalance, 2) + " % du solde)" : ""),
            "\nProtections : reduction a -", DoubleToString(ReduceStep1Pct, 1), " % / -", DoubleToString(ReduceStep2Pct, 1),
