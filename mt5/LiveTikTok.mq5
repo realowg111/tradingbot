@@ -285,7 +285,7 @@ void Step()
    }
 
    // protection 2 : reduction de la rafale, la plus grosse position d'abord
-   if(phase == 1)
+   if(phase >= 1)
    {
       if(CloseAllPct > 0 && pct <= -CloseAllPct)
       {

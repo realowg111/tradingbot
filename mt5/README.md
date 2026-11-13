@@ -223,3 +223,24 @@ Règles codées :
 `EmergencyPct` (0 par défaut, comme le live) permet un arrêt d'urgence.
 
 Simulation des mêmes règles sur l'or 2024–2025 (`scripts/xau_daytrade/tiktok_live_sim.py`, 99 essais de 30 jours, levier 1:500) : 89 % des rafales gagnantes, mais 100 % des comptes perdus, en 0,42 jour en médiane (0,26 jour en utilisant 88 % de la marge, comme dans la 4e rafale).
+
+## LiveTikTok, version protégée (1.10)
+
+Protections ajoutées sans changer le style (pause, contre-courant, rafale, fermeture progressive de la plus grosse position) :
+1. contre-courant seulement dans le sens de la tendance de fond (EMA 50 en H1) ;
+2. réduction de la rafale si elle perd, la plus grosse position d'abord : à -2 %, puis à -3,5 %, puis tout à -5 % ;
+3. fermeture après 15 minutes sans gain ;
+4. rafales plus petites : 20 % du solde en marge au lieu de 70 %.
+
+Simulation sur l'or 2024–2025 (`scripts/xau_daytrade/tiktok_protected_sim.py`, 99 essais de 30 jours, 500 au départ) :
+
+| Version | Comptes perdus | Durée médiane avant la perte | Rafales gagnantes |
+|---|---|---|---|
+| Live (70 % de marge, aucune protection) | 100 % | 0,4 jour | 90 % |
+| 20 % de marge | 100 % | 2,1 jours | 96 % |
+| 20 % + filtre de tendance | 100 % | 2,5 jours | 96 % |
+| 20 % + réduction -2 / -3,5 / -5 % | 100 % | 3,3 jours | 48 % |
+| 20 % + tendance + réduction + 15 min | 100 % | 3,1 jours | 37 % |
+| 10 % + tendance + réduction + 15 min | 100 % | 8,4 jours | 34 % |
+
+Les protections ralentissent la perte, de quelques heures à plus d'une semaine, mais ne l'empêchent pas. La stratégie elle-même n'a pas d'avantage : entrer à contre-courant toutes les quelques minutes gagne en moyenne autant que ça perd, et chaque rafale paie un spread d'environ 0,6 % du compte à 20 % de marge. Les protections changent seulement la façon de perdre : soit de rares grosses pertes, soit des pertes moyennes plus fréquentes.
