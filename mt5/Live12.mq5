@@ -19,7 +19,7 @@ int score = 0;
 double startBalance = 0;
 datetime openTime = 0;
 int burstSide = 0;
-string status = "demarrage";
+string lastError = "aucune";
 
 //+------------------------------------------------------------------+
 double Val(int handle, int buffer)
@@ -123,8 +123,14 @@ void OpenBurst(int side)
    burstSide = side;
    for(int i = 0; i < 6; i++)
    {
-      if(side > 0) trade.Buy(Lot(lots[i]), _Symbol);
-      else trade.Sell(Lot(lots[i]), _Symbol);
+      bool ok;
+      if(side > 0) ok = trade.Buy(Lot(lots[i]), _Symbol);
+      else ok = trade.Sell(Lot(lots[i]), _Symbol);
+      if(!ok)
+      {
+         lastError = IntegerToString((int)trade.ResultRetcode()) + " " + trade.ResultComment();
+         Print("Ordre refuse : ", lastError);
+      }
    }
    Print("Rafale ouverte, score ", score);
 }
@@ -147,6 +153,12 @@ void Manage()
 int OnInit()
 {
    trade.SetExpertMagicNumber((ulong)MagicNumber);
+   trade.SetDeviationInPoints(50);
+   // mode d'execution accepte par le courtier (sinon les ordres sont refuses)
+   long filling = SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
+   if((filling & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK) trade.SetTypeFilling(ORDER_FILLING_FOK);
+   else if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC) trade.SetTypeFilling(ORDER_FILLING_IOC);
+   else trade.SetTypeFilling(ORDER_FILLING_RETURN);
    hRSI   = iRSI(_Symbol, PERIOD_M1, 14, PRICE_CLOSE);
    hMACD  = iMACD(_Symbol, PERIOD_M1, 12, 26, 9, PRICE_CLOSE);
    hEMA20 = iMA(_Symbol, PERIOD_M1, 20, 0, MODE_EMA, PRICE_CLOSE);
@@ -181,8 +193,14 @@ void OnTimer()
    if(n > 0 && side != 0 && side != burstSide) { CloseAll("signal inverse"); n = 0; }
    if(n == 0 && side != 0) OpenBurst(side);
 
+   string allowed = "OUI";
+   if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) == 0) allowed = "NON : bouton Trading Algo";
+   else if(MQLInfoInteger(MQL_TRADE_ALLOWED) == 0) allowed = "NON : cocher 'Autoriser le trading algorithmique'";
+
    double buyPct = 50.0 + 5.0 * score;
    Comment("LIVE 12  -  ", _Symbol,
+           "\nTrading autorise : ", allowed,
+           "\nDerniere erreur d'ordre : ", lastError,
            "\nScore : ", score, " (requis +/-", MinVotes, ")",
            "\nACHAT ", DoubleToString(buyPct, 0), " %   VENTE ", DoubleToString(100 - buyPct, 0), " %",
            "\nPositions : ", n, "   Resultat : ", DoubleToString(profit, 2),
