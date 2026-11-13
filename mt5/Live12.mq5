@@ -1,48 +1,55 @@
 //+------------------------------------------------------------------+
-//| Live12.mq5 - version simple                                      |
-//| 10 indicateurs votent chaque seconde -> jauge ACHAT % / VENTE %. |
-//| Si la confiance reste du meme cote pendant 3 s : 6 positions.    |
-//| Le groupe est ferme a +0.6 % (gain) ou -0.4 % (perte).          |
+//| Live12.mq5 - boucle continue comme dans la video                 |
+//|                                                                  |
+//| 1. ANALYSE  : 3 a 5 s de lecture des 12 indicateurs (jauge       |
+//|               ACHAT % / VENTE %), seule pause du robot           |
+//| 2. RAFALE   : 6 positions du cote dominant                       |
+//| 3. SORTIES  : chaque position a son TP ; la plus grosse a le TP  |
+//|               le plus proche et se ferme en premier en profit,   |
+//|               puis le reste suit (stop a l'entree, puis suiveur) |
+//| 4. PERTES   : rafale fermee si pas gagnante apres N secondes,    |
+//|               ou si la perte atteint la limite                   |
+//| 5. retour a l'analyse, en boucle                                 |
 //+------------------------------------------------------------------+
-#property version "1.00"
+#property version "2.00"
 #include <Trade\Trade.mqh>
 
-input int    MinVotes   = 5;      // Votes requis (sur 10)
-input double LotScale   = 0.2;    // Taille des lots (0.2 pour 1000)
-input double TargetPct  = 0.6;    // Ferme tout a +x % du solde
-input double LossPct    = 0.4;    // Ferme tout a -x % du solde
-input int    MaxMinutes = 10;     // Duree max d'une rafale (minutes)
-input bool   VideoMode  = false;  // true = rythme de la video : 2 votes, rafale fermee apres 6 s, objectif +0.3 %
-input int    MaxSeconds = 0;      // Ferme la rafale apres N secondes (0 = off)
-input int    ReadSeconds   = 3;   // Lecture : la confiance doit rester du meme cote pendant N secondes
-input double MinConfidence = 70;  // Lecture : confiance minimale (%) a chaque seconde de lecture
-input long   MagicNumber = 1212;
+input int    ReadSeconds  = 4;      // Analyse avant chaque rafale (secondes)
+input double LotScale     = 0.2;    // Taille des lots (0.2 pour 1000)
+input double TPScale      = 1.0;    // Multiplie toutes les distances de TP
+input double LossPct      = 0.4;    // Ferme tout si la perte atteint x % du solde
+input int    CutSeconds   = 20;     // Ferme tout si la rafale n'est pas gagnante apres N s
+input int    MaxSeconds   = 180;    // Duree max d'une rafale
+input double TrailATR     = 0.3;    // Distance du stop suiveur du reste, en ATR
+input double SafetySL_ATR = 2.0;    // Stop de securite chez le courtier, en ATR (coupure)
+input long   MagicNumber  = 1212;
 
 CTrade trade;
 int hRSI, hMACD, hEMA20, hEMAH1, hBB, hATR;
-int score = 0;
+
+// lots de la rafale : le 1er (le plus gros) a le TP le plus proche
+double lots[6]  = {0.30, 0.20, 0.15, 0.10, 0.05, 0.05};
+double tpATR[6] = {0.15, 0.25, 0.35, 0.50, 0.70, 1.00};
+
+int    score = 0;
+double atr = 0;
+int    phase = 0;          // 0 = analyse, 1 = rafale ouverte
+int    readCount = 0;
+int    readSum = 0;
+int    burstSide = 0;
+int    burstSize = 0;
 double startBalance = 0;
 datetime openTime = 0;
-int burstSide = 0;
-// reglages effectifs (VideoMode les remplace)
-int    useVotes;
-double useTarget, useLoss;
-int    useSeconds;
+int    bursts = 0, winBursts = 0;
+double totalResult = 0;
+string lastEvent = "demarrage";
 string lastError = "aucune";
-string lastClose = "aucune";
-int bursts = 0;
-// lecture de la jauge seconde par seconde
-int    readSide = 0;              // cote lu (1 achat, -1 vente, 0 aucun)
-int    readCount = 0;             // secondes consecutives de lecture du meme cote
-double readSum = 0;               // somme des confiances lues
-int    useRead;
-double useConf;
 
 //+------------------------------------------------------------------+
-double Val(int handle, int buffer)
+double Val(int handle, int buffer, int shift)
 {
    double v[];
-   if(CopyBuffer(handle, buffer, 0, 1, v) < 1) return 0;
+   if(CopyBuffer(handle, buffer, shift, 1, v) < 1) return 0;
    return v[0];
 }
 
@@ -53,7 +60,7 @@ int Vote(double a, double b)
    return 0;
 }
 
-//--- calcule le score (de -10 a +10)
+//--- les 12 indicateurs -> score de -10 a +10
 bool ComputeScore()
 {
    MqlRates r[];
@@ -61,13 +68,14 @@ bool ComputeScore()
    if(CopyRates(_Symbol, PERIOD_M1, 0, 25, r) < 25) return false;
 
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double rsi   = Val(hRSI, 0);
-   double macd  = Val(hMACD, 0);
-   double sig   = Val(hMACD, 1);
-   double e20   = Val(hEMA20, 0);
-   double eh1   = Val(hEMAH1, 0);
-   double mid   = Val(hBB, 0);
-   if(rsi == 0 || e20 == 0 || eh1 == 0 || mid == 0) return false;
+   double rsi  = Val(hRSI, 0, 0);
+   double macd = Val(hMACD, 0, 0);
+   double sig  = Val(hMACD, 1, 0);
+   double e20  = Val(hEMA20, 0, 0);
+   double eh1  = Val(hEMAH1, 0, 0);
+   double mid  = Val(hBB, 0, 0);
+   atr = Val(hATR, 0, 1);
+   if(rsi == 0 || e20 == 0 || eh1 == 0 || mid == 0 || atr <= 0) return false;
 
    double hi = r[1].high, lo = r[1].low;
    for(int i = 1; i <= 20; i++)
@@ -92,7 +100,7 @@ bool ComputeScore()
    return true;
 }
 
-//--- nombre de positions du robot et leur resultat
+//--- positions du robot
 int CountPositions(double &profit)
 {
    int n = 0;
@@ -109,7 +117,7 @@ int CountPositions(double &profit)
    return n;
 }
 
-void CloseAll(string reason)
+void EndBurst(string reason)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -119,9 +127,13 @@ void CloseAll(string reason)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       trade.PositionClose(ticket);
    }
-   Print("Rafale fermee : ", reason);
-   lastClose = reason + " a " + TimeToString(TimeTradeServer(), TIME_SECONDS);
-   burstSide = 0;
+   double result = AccountInfoDouble(ACCOUNT_BALANCE) - startBalance;
+   bursts++;
+   totalResult += result;
+   if(result > 0) winBursts++;
+   lastEvent = reason + " : rafale " + DoubleToString(result, 2) + " a " + TimeToString(TimeTradeServer(), TIME_SECONDS);
+   Print(lastEvent);
+   phase = 0; readCount = 0; readSum = 0;        // retour a l'analyse
 }
 
 double Lot(double base)
@@ -135,59 +147,122 @@ double Lot(double base)
 
 void OpenBurst(int side)
 {
-   double lots[6] = {0.30, 0.20, 0.15, 0.10, 0.05, 0.05};
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    startBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    openTime = TimeTradeServer();
    burstSide = side;
+   burstSize = 0;
    for(int i = 0; i < 6; i++)
    {
+      double price, sl, tp;
       bool ok;
-      if(side > 0) ok = trade.Buy(Lot(lots[i]), _Symbol);
-      else ok = trade.Sell(Lot(lots[i]), _Symbol);
-      if(!ok)
+      if(side > 0)
       {
-         lastError = IntegerToString((int)trade.ResultRetcode()) + " " + trade.ResultComment();
-         Print("Ordre refuse : ", lastError);
+         price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         sl = NormalizeDouble(price - SafetySL_ATR * atr, digits);
+         tp = NormalizeDouble(price + tpATR[i] * TPScale * atr, digits);
+         ok = trade.Buy(Lot(lots[i]), _Symbol, 0, sl, tp);
       }
+      else
+      {
+         price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         sl = NormalizeDouble(price + SafetySL_ATR * atr, digits);
+         tp = NormalizeDouble(price - tpATR[i] * TPScale * atr, digits);
+         ok = trade.Sell(Lot(lots[i]), _Symbol, 0, sl, tp);
+      }
+      if(ok) burstSize++;
+      else lastError = IntegerToString((int)trade.ResultRetcode()) + " " + trade.ResultComment();
    }
-   bursts++;
-   Print("Rafale ouverte, score ", score);
+   if(burstSize > 0)
+   {
+      phase = 1;
+      string dir = "VENTE";
+      if(side > 0) dir = "ACHAT";
+      lastEvent = dir + " : rafale de " + IntegerToString(burstSize) + " ouverte a " + TimeToString(openTime, TIME_SECONDS);
+      Print(lastEvent);
+   }
+   else { phase = 0; readCount = 0; readSum = 0; }
 }
 
-//--- gestion du groupe de positions
+//--- apres le 1er TP (le plus gros lot) : le reste suit
+void FollowRest()
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double minDist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double cur  = PositionGetDouble(POSITION_PRICE_CURRENT);
+      double sl   = PositionGetDouble(POSITION_SL);
+      double tp   = PositionGetDouble(POSITION_TP);
+      double newSl = sl;
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+      {
+         double target = open + spread;                   // stop au prix d'entree
+         double tr = cur - TrailATR * atr;                // stop suiveur
+         if(tr > target) target = tr;
+         if(target > newSl && cur - target > minDist) newSl = target;
+      }
+      else
+      {
+         double target = open - spread;
+         double tr = cur + TrailATR * atr;
+         if(tr < target) target = tr;
+         if((newSl == 0 || target < newSl) && target - cur > minDist) newSl = target;
+      }
+      newSl = NormalizeDouble(newSl, digits);
+      if(MathAbs(newSl - sl) >= 5 * _Point) trade.PositionModify(ticket, newSl, tp);
+   }
+}
+
+//--- gestion de la rafale ouverte
 void Manage()
 {
+   if(phase != 1) return;
    double profit;
    int n = CountPositions(profit);
-   if(n == 0) return;
-   if(startBalance <= 0) startBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   if(openTime == 0) openTime = TimeTradeServer();
-   double pct = 100.0 * profit / startBalance;
-   if(pct >= useTarget) { CloseAll("objectif"); return; }
-   if(pct <= -useLoss) { CloseAll("limite de perte"); return; }
-   if(useSeconds > 0 && (long)(TimeTradeServer() - openTime) >= (long)useSeconds) { CloseAll("duree max (secondes)"); return; }
-   if((long)(TimeTradeServer() - openTime) >= (long)MaxMinutes * 60) { CloseAll("duree max"); return; }
+   if(n == 0) { EndBurst("toutes les positions fermees (TP / stop)"); return; }
+
+   double pct = 100.0 * (AccountInfoDouble(ACCOUNT_EQUITY) - startBalance) / startBalance;
+   long age = (long)(TimeTradeServer() - openTime);
+
+   if(pct <= -LossPct) { EndBurst("limite de perte"); return; }
+   if(n == burstSize && age >= CutSeconds && profit <= 0) { EndBurst("pas gagnante apres " + IntegerToString(CutSeconds) + " s"); return; }
+   if(age >= MaxSeconds) { EndBurst("duree max"); return; }
+   if(n < burstSize) FollowRest();                 // le gros lot est sorti en profit : le reste suit
 }
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   useVotes = MinVotes; useTarget = TargetPct; useLoss = LossPct; useSeconds = MaxSeconds;
-   useRead = ReadSeconds; useConf = MinConfidence;
-   if(VideoMode) { useVotes = 2; useTarget = 0.3; useLoss = 0.4; useSeconds = 6; useRead = 3; useConf = 60; }
-   if(useRead < 1) useRead = 1;
    trade.SetExpertMagicNumber((ulong)MagicNumber);
    trade.SetDeviationInPoints(50);
-   // mode d'execution accepte par le courtier (sinon les ordres sont refuses)
    long filling = SymbolInfoInteger(_Symbol, SYMBOL_FILLING_MODE);
    if((filling & SYMBOL_FILLING_FOK) == SYMBOL_FILLING_FOK) trade.SetTypeFilling(ORDER_FILLING_FOK);
    else if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC) trade.SetTypeFilling(ORDER_FILLING_IOC);
    else trade.SetTypeFilling(ORDER_FILLING_RETURN);
+
    hRSI   = iRSI(_Symbol, PERIOD_M1, 14, PRICE_CLOSE);
    hMACD  = iMACD(_Symbol, PERIOD_M1, 12, 26, 9, PRICE_CLOSE);
    hEMA20 = iMA(_Symbol, PERIOD_M1, 20, 0, MODE_EMA, PRICE_CLOSE);
    hEMAH1 = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
    hBB    = iBands(_Symbol, PERIOD_M1, 20, 0, 2.0, PRICE_CLOSE);
+   hATR   = iATR(_Symbol, PERIOD_M1, 14);
+
+   // reprise apres un redemarrage avec des positions deja ouvertes
+   double p;
+   if(CountPositions(p) > 0)
+   {
+      phase = 1; burstSize = 6;
+      startBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+      openTime = TimeTradeServer();
+   }
+
    EventSetTimer(1);
    return INIT_SUCCEEDED;
 }
@@ -206,53 +281,43 @@ void OnTick()
 void OnTimer()
 {
    Manage();
-   if(!ComputeScore()) { Comment("Indicateurs pas encore prets"); return; }
+   if(!ComputeScore()) { Comment("LIVE 12 : indicateurs pas encore prets"); return; }
+
+   bool allowedOk = (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) != 0 && MQLInfoInteger(MQL_TRADE_ALLOWED) != 0);
+
+   // phase d'analyse : lire la jauge pendant ReadSeconds, puis ouvrir du cote dominant
+   if(phase == 0)
+   {
+      readCount++;
+      readSum += score;
+      if(readCount >= ReadSeconds)
+      {
+         int side = 0;
+         if(readSum > 0) side = 1;
+         if(readSum < 0) side = -1;
+         if(side != 0 && allowedOk) OpenBurst(side);
+         else { readCount = 0; readSum = 0; }
+      }
+   }
 
    double profit;
    int n = CountPositions(profit);
-
-   // 1) lecture de la jauge : confiance du cote dominant, a chaque seconde
    double buyPct = 50.0 + 5.0 * score;
-   int nowSide = 0;
-   double conf = 50.0;
-   if(score > 0) { nowSide = 1; conf = buyPct; }
-   if(score < 0) { nowSide = -1; conf = 100.0 - buyPct; }
-   bool strong = (nowSide != 0 && conf >= useConf && (score >= useVotes || score <= -useVotes));
-   if(strong && nowSide == readSide) { readCount++; readSum += conf; }
-   else if(strong) { readSide = nowSide; readCount = 1; readSum = conf; }
-   else { readSide = 0; readCount = 0; readSum = 0; }
-
-   // 2) signal valide si la lecture a dure assez longtemps
-   int side = 0;
-   if(readCount >= useRead) side = readSide;
-
-   if(n > 0 && side != 0 && side != burstSide) { CloseAll("signal inverse"); n = 0; }
-   if(n == 0 && side != 0)
-   {
-      Print("Lecture validee : ", readCount, " s, confiance moyenne ", DoubleToString(readSum / readCount, 0), " %");
-      OpenBurst(side);
-      readSide = 0; readCount = 0; readSum = 0;     // nouvelle lecture pour la rafale suivante
-   }
-
-   string reading = "en attente d'un cote dominant";
-   if(readCount > 0)
-      reading = (readSide > 0 ? "ACHAT " : "VENTE ") + IntegerToString(readCount) + "/" + IntegerToString(useRead) +
-                " s, confiance moyenne " + DoubleToString(readSum / readCount, 0) + " %";
-
    string allowed = "OUI";
    if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) == 0) allowed = "NON : bouton Trading Algo";
    else if(MQLInfoInteger(MQL_TRADE_ALLOWED) == 0) allowed = "NON : cocher 'Autoriser le trading algorithmique'";
+   string ph = "ANALYSE " + IntegerToString(readCount) + "/" + IntegerToString(ReadSeconds) + " s";
+   if(phase == 1)
+      ph = "RAFALE : " + IntegerToString(n) + "/" + IntegerToString(burstSize) + " positions, " +
+           DoubleToString(profit, 2) + ", depuis " + IntegerToString((int)(TimeTradeServer() - openTime)) + " s";
 
    Comment("LIVE 12  -  ", _Symbol,
-           "\nTrading autorise : ", allowed,
-           "\nDerniere erreur d'ordre : ", lastError,
-           "\nRafales ouvertes : ", bursts, "   derniere fermeture : ", lastClose,
-           "\nHeure serveur : ", TimeToString(TimeTradeServer(), TIME_SECONDS), "   dernier prix recu : ", TimeToString(TimeCurrent(), TIME_SECONDS),
-           "\nScore : ", score, " (requis +/-", useVotes, ")",
-           "\nMode video : ", (VideoMode ? "OUI" : "non"), "   duree max rafale : ", (useSeconds > 0 ? IntegerToString(useSeconds) + " s" : IntegerToString(MaxMinutes) + " min"),
-           "\nACHAT ", DoubleToString(buyPct, 0), " %   VENTE ", DoubleToString(100 - buyPct, 0), " %",
-           "\nLecture : ", reading, "   (requis ", useRead, " s a ", DoubleToString(useConf, 0), " % ou plus)",
-           "\nPositions : ", n, "   Resultat : ", DoubleToString(profit, 2),
-           "\nSolde : ", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2));
+           "\nTrading autorise : ", allowed, "   derniere erreur : ", lastError,
+           "\nPhase : ", ph,
+           "\nACHAT ", DoubleToString(buyPct, 0), " %   VENTE ", DoubleToString(100 - buyPct, 0), " %   (score ", score, ")",
+           "\nRafales : ", bursts, "   gagnantes : ", winBursts, "   total : ", DoubleToString(totalResult, 2),
+           "\nDernier evenement : ", lastEvent,
+           "\nSolde : ", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2),
+           "   Equite : ", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2));
 }
 //+------------------------------------------------------------------+
