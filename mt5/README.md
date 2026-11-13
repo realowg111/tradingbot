@@ -180,14 +180,16 @@ Dans le testeur de stratégies : modèle **« Chaque tick basé sur des ticks r�
 # Robot simple : Scalper12Live (un seul comportement, celui du live)
 
 `Scalper12Live.mq5` est un robot à part, sans préréglage à choisir :
-1. Toutes les **5 secondes**, les 12 indicateurs votent et donnent la jauge ACHAT % / VENTE %.
-2. Dès que **7 votes sur 10** sont alignés, il ouvre une **rafale de 6 positions** (0,30 / 0,20 / 0,15 / 0,10 / 0,05 / 0,05 × `LotScale`), sans SL ni TP individuels.
+1. Toutes les **2 secondes**, les 12 indicateurs votent **sur le prix en direct** (bougie en cours) et donnent la jauge ACHAT % / VENTE %. Les votes changent donc toutes les quelques secondes, comme dans la vidéo. Avec `LiveVotes` = false, ils ne changent qu'à la clôture de chaque bougie d'1 minute.
+2. Dès que **5 votes sur 10** sont alignés, il ouvre une **rafale de 6 positions** (0,30 / 0,20 / 0,15 / 0,10 / 0,05 / 0,05 × `LotScale`), sans SL ni TP individuels.
 3. La rafale est gérée **comme un tout**, en % du solde :
-   - fermée à **+1 %** (objectif) ;
-   - fermée à **-0,7 %** (limite de perte : la perte est encaissée, petite et connue) ;
-   - si elle a atteint +0,5 % puis retombe sous la moitié de son meilleur gain, fermée pour protéger le gain ;
-   - fermée après 30 minutes ou si le signal s'inverse.
+   - fermée à **+0,6 %** (objectif) ;
+   - fermée à **-0,4 %** (limite de perte : la perte est encaissée, petite et connue) ;
+   - si elle a atteint +0,3 % puis retombe sous la moitié de son meilleur gain, fermée pour protéger le gain ;
+   - fermée après 10 minutes ou si le signal s'inverse.
 4. Puis il recommence.
+
+Le spread se paie à chaque rafale. Avec `LotScale` = 0,2 sur 1 000 €, une rafale fait 0,17 lot, et 0,20 $ de spread sur l'or coûte environ 3,4 €, soit 0,34 % du compte. C'est pour ça que l'objectif ne doit pas descendre sous environ 0,5 % : en dessous, le spread mange presque tout le gain.
 
 Installation : copier le fichier dans `MQL5/Experts`, compiler (F7), le glisser sur **XAUUSD M1**, garder `LotScale` = 0,2 pour 1 000 €, activer **Trading Algo**. Retirez les autres robots de ce graphique.
 

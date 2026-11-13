@@ -1,38 +1,39 @@
 //+------------------------------------------------------------------+
 //| Scalper12Live.mq5                                                |
 //| One behaviour only, the one of the TikTok live, with limits:     |
-//|  - every 5 s, 12 indicators vote -> gauge BUY % / SELL %         |
-//|  - 7 of 10 votes aligned -> a burst of 6 positions at once,      |
+//|  - every 2 s, 12 indicators vote on the live price -> gauge     |
+//|  - 5 of 10 votes aligned -> a burst of 6 positions at once,      |
 //|    without individual SL/TP                                      |
 //|  - the burst is managed as one basket:                           |
-//|      closed at +1 % of the balance (target)                      |
-//|      closed at -0.7 % of the balance (loss limit)                |
-//|      once it reached +0.5 %, closed if it falls back to half     |
+//|      closed at +0.6 % of the balance (target)                    |
+//|      closed at -0.4 % of the balance (loss limit)                |
+//|      once it reached +0.3 %, closed if it falls back to half     |
 //|      of its best gain                                            |
-//|      closed after 30 minutes or if the signal flips              |
+//|      closed after 10 minutes or if the signal flips              |
 //| Demo first. Python tests of these indicators on 2009-2026 gold   |
 //| did not find a lasting edge after costs.                         |
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 
 #include <Trade/Trade.mqh>
 
 input group "Signal"
-input int    MinVotes         = 7;      // Votes alignes requis (sur 10)
-input int    CycleSeconds     = 5;      // Un calcul toutes les N secondes
+input int    MinVotes         = 5;      // Votes alignes requis (sur 10)
+input int    CycleSeconds     = 2;      // Un calcul toutes les N secondes
+input bool   LiveVotes        = true;   // Votes sur le prix en direct (sinon sur la derniere bougie M1 cloturee)
 
 input group "Rafale"
 input string Lots             = "0.30,0.20,0.15,0.10,0.05,0.05"; // Lots de la rafale
 input double LotScale         = 0.2;    // Multiplie tous les lots (0.2 conseille pour 1 000)
 
 input group "Panier (en % du solde)"
-input double TargetPct        = 1.0;    // Objectif : ferme toute la rafale a +x %
-input double LossLimitPct     = 0.7;    // Limite : ferme toute la rafale a -x %
-input double LockStartPct     = 0.5;    // Protection : des que la rafale a atteint +x %...
+input double TargetPct        = 0.6;    // Objectif : ferme toute la rafale a +x %
+input double LossLimitPct     = 0.4;    // Limite : ferme toute la rafale a -x %
+input double LockStartPct     = 0.3;    // Protection : des que la rafale a atteint +x %...
 input double LockKeepPct      = 50.0;   // ...ferme si elle retombe sous ce % de son meilleur gain
-input int    MaxMinutes       = 30;     // Duree max d'une rafale
+input int    MaxMinutes       = 10;     // Duree max d'une rafale
 input bool   CloseOnFlip      = true;   // Ferme la rafale si le signal s'inverse
 
 input group "Divers"
@@ -85,9 +86,10 @@ bool Read()
    MqlRates r[];
    ArraySetAsSeries(r, true);
    if(CopyRates(_Symbol, PERIOD_M1, 0, 40, r) < 40) return false;
-   double c = r[1].close;
-   double rsi = Buf(hRSI, 0, 1), macd = Buf(hMACD, 0, 1), sig = Buf(hMACD, 1, 1);
-   double e20 = Buf(hEMA20, 0, 1), eh1 = Buf(hEMAH1, 0, 1), mid = Buf(hBB, 0, 1);
+   int b = LiveVotes ? 0 : 1;                                  // 0 = forming bar, follows the live price
+   double c = LiveVotes ? (SymbolInfoDouble(_Symbol, SYMBOL_BID) + SymbolInfoDouble(_Symbol, SYMBOL_ASK)) / 2.0 : r[1].close;
+   double rsi = Buf(hRSI, 0, b), macd = Buf(hMACD, 0, b), sig = Buf(hMACD, 1, b);
+   double e20 = Buf(hEMA20, 0, b), eh1 = Buf(hEMAH1, 0, 0), mid = Buf(hBB, 0, b);
    double atr = Buf(hATR, 0, 1), atr100 = Buf(hATR100, 0, 1);
    if(rsi == EMPTY_VALUE || macd == EMPTY_VALUE || e20 == EMPTY_VALUE || eh1 == EMPTY_VALUE ||
       mid == EMPTY_VALUE || atr == EMPTY_VALUE || atr100 == EMPTY_VALUE || atr <= 0) return false;
@@ -107,10 +109,10 @@ bool Read()
       }
       vwap = pv / v;
    }
-   double hi12 = r[2].high, lo12 = r[2].low, hi20 = r[2].high, lo20 = r[2].low;
-   for(int i = 2; i <= 21; i++)
+   double hi12 = r[b + 1].high, lo12 = r[b + 1].low, hi20 = r[b + 1].high, lo20 = r[b + 1].low;
+   for(int i = b + 1; i <= b + 20; i++)
    {
-      if(i <= 13) { hi12 = MathMax(hi12, r[i].high); lo12 = MathMin(lo12, r[i].low); }
+      if(i <= b + 12) { hi12 = MathMax(hi12, r[i].high); lo12 = MathMin(lo12, r[i].low); }
       hi20 = MathMax(hi20, r[i].high); lo20 = MathMin(lo20, r[i].low);
    }
    g_atr = atr;
@@ -123,8 +125,9 @@ bool Read()
    g_vals[5] = (c - mid) / atr;         g_votes[5] = c > mid ? 1 : (c < mid ? -1 : 0);
    g_vals[6] = atr / atr100;            g_votes[6] = 0;
    g_vals[7] = (c - vwap) / atr;        g_votes[7] = c > vwap ? 1 : (c < vwap ? -1 : 0);
-   g_vals[8] = (c - r[6].close) / atr;  g_votes[8] = c > r[6].close ? 1 : (c < r[6].close ? -1 : 0);
-   g_vals[9] = (c - r[16].close) / atr; g_votes[9] = c > r[16].close ? 1 : (c < r[16].close ? -1 : 0);
+   double m5 = r[b + 5].close, m15 = r[b + 15].close;
+   g_vals[8] = (c - m5) / atr;          g_votes[8] = c > m5 ? 1 : (c < m5 ? -1 : 0);
+   g_vals[9] = (c - m15) / atr;         g_votes[9] = c > m15 ? 1 : (c < m15 ? -1 : 0);
    g_vals[10] = c > hi20 ? 1 : (c < lo20 ? -1 : 0); g_votes[10] = (int)g_vals[10];
    g_score = 0;
    for(int i = 0; i < 11; i++) g_score += g_votes[i];
