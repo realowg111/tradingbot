@@ -105,6 +105,7 @@ double   g_tkP[1024];
 long     g_tkT[1024];
 int      g_tkHead = 0, g_tkN = 0;
 ulong    g_lastSecCycle = 0;
+string   g_secStatus = "en attente du premier cycle";
 
 int hRSI, hMACD, hEMA20, hEMA9, hEMAH1, hBB, hATR, hATR100;
 datetime g_lastBar = 0;
@@ -229,18 +230,22 @@ void SecCycle()
    if(DailyStopPct > 0 && !g_halted && AccountInfoDouble(ACCOUNT_EQUITY) < g_dayStartEq * (1 - DailyStopPct / 100.0))
    { g_halted = true; CloseSide(0, "arret journalier"); J("Arret pour la journee (perte max atteinte)"); }
    MqlRates r[];
-   if(!Read(r)) return;
+   if(!Read(r)) { g_secStatus = "indicateurs pas encore prets (historique M1 ?)"; return; }
    g_calc++;
-   if(g_halted) return;
-   double e; if(CountPositions(0, e, 0) > 0) return;               // adds are handled by SecManage
-   int side = g_score >= SecMinVotes ? 1 : (g_score <= -SecMinVotes ? -1 : 0);
-   if(side == 0) return;
+   if(g_halted) { g_secStatus = "arret journalier actif"; return; }
+   double e; int open = CountPositions(0, e, 0);
    double atr = CurrentATR();
-   if(atr <= 0) return;
    double move = TickMove(MomentumSeconds);
-   if(side * move < MomentumATR * atr) return;                      // no momentum in the votes' direction
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   if(ask - bid > MaxSpreadATR * atr) return;
+   string base = StringFormat("cycle %I64d | votes %+d (requis +/-%d) | elan %+.2f en %ds (requis %.2f) | spread %.2f (max %.2f)",
+                              g_calc, g_score, SecMinVotes, move, MomentumSeconds, MomentumATR * atr, ask - bid, MaxSpreadATR * atr);
+   if(open > 0) { g_secStatus = base + " -> position en cours, gestion et renforts"; return; }   // adds are handled by SecManage
+   int side = g_score >= SecMinVotes ? 1 : (g_score <= -SecMinVotes ? -1 : 0);
+   if(side == 0) { g_secStatus = base + " -> attend : pas assez de votes alignes"; return; }
+   if(atr <= 0) { g_secStatus = base + " -> attend : ATR indisponible"; return; }
+   if(side * move < MomentumATR * atr) { g_secStatus = base + " -> attend : pas assez d'elan"; return; }
+   if(ask - bid > MaxSpreadATR * atr) { g_secStatus = base + " -> attend : spread trop large"; return; }
+   g_secStatus = base + " -> ENTREE";
    J(StringFormat("Signal %s valide : %d/10 votes, elan %+.2f en %ds, confiance %.0f%%", side > 0 ? "d'achat" : "de vente",
                   MathAbs(g_score), move, MomentumSeconds, (side > 0 ? g_pBuy : 1 - g_pBuy) * 100));
    SecOpen(side, NormLot(SecBaseLot), SecInitialSL_ATR * atr, "elan");
@@ -663,6 +668,7 @@ void Panel()
          sw >= sl ? clrLime : clrOrangeRed); y += 16;
    string reg = !p_trend ? "filtre off" : (g_regime > 0 ? "HAUSSIERE (achats seulement)" : (g_regime < 0 ? "BAISSIERE (ventes seulement)" : "neutre (pas de trade)"));
    Label("S12_r", x, y, "Tendance du jour : " + reg, g_regime > 0 ? clrLime : (g_regime < 0 ? clrOrangeRed : clrSilver)); y += 22;
+   if(p_sec) { Label("S12_s", x, y, "Mode SECONDES : " + g_secStatus, clrYellow, 8); y += 18; }
    Label("S12_g", x, y, StringFormat("ACHAT %.1f%%   |   VENTE %.1f%%   (score %+d)", g_pBuy * 100, (1 - g_pBuy) * 100, g_score),
          g_pBuy >= 0.5 ? clrLime : clrOrangeRed, 11); y += 22;
    for(int i = 0; i < 12; i++)
