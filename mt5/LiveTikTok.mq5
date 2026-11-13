@@ -15,11 +15,13 @@
 //| Ajout a la strategie du live : reduction de la rafale si elle    |
 //| perd, la plus grosse position d'abord : -2 %, -3.5 %, puis tout  |
 //| a -5 % du solde. Le reste est identique au live.                 |
-//| Contre les series de pertes : pause de 30 min apres 2 rafales    |
-//| perdantes d'affilee, arret jusqu'au lendemain a -8 % sur le jour.|
+//| Sens : jauge des 12 indicateurs lue pendant la pause (ACHAT % /  |
+//| VENTE %, sentiment), ou jauge + contre-courant, ou contre-courant|
+//| Series de pertes : pause de 15 s apres 3 rafales perdantes,      |
+//| arret jusqu'au lendemain a -8 % sur le jour.                     |
 //| Options desactivees par defaut : TrendFilter, MaxBurstMinutes.   |
 //+------------------------------------------------------------------+
-#property version "1.30"
+#property version "1.40"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
@@ -34,8 +36,11 @@ input double ReduceStep1Pct = 2.0;   // Protection 2 : a -x % ferme la plus gros
 input double ReduceStep2Pct = 3.5;   // ... a -x % ferme la plus grosse restante
 input double CloseAllPct    = 5.0;   // ... a -x % ferme tout ce qui reste
 input int    MaxBurstMinutes = 0;    // Option : ferme la rafale si elle n'est pas en gain apres N minutes (0 = off)
-input int    LossStreak     = 2;     // Apres N rafales perdantes d'affilee...
-input int    StreakPauseMin = 30;    // ...pause de N minutes (0 = off)
+input int    LossStreak     = 3;     // Apres N rafales perdantes d'affilee...
+input int    StreakPauseSec = 15;    // ...pause de N secondes (0 = off)
+
+input int    DirectionMode  = 0;     // Sens : 0 = jauge des 12 indicateurs, 1 = jauge ET contre-courant d'accord, 2 = contre-courant seul
+input double MinConfidence  = 60;    // Jauge : confiance minimale (%) du cote choisi, en moyenne sur la pause
 input double DailyLossPct   = 8.0;   // Arret jusqu'au lendemain si le compte perd x % dans la journee (0 = off)
 input long   MagicNumber    = 7777;
 
@@ -57,6 +62,12 @@ double   startBalance = 0;
 int      bursts = 0;
 int      reduceStage = 0;          // paliers de reduction deja appliques a la rafale
 int      hTrend = INVALID_HANDLE;
+int      hRSI = INVALID_HANDLE, hMACD = INVALID_HANDLE, hEMA20 = INVALID_HANDLE, hEMAH1 = INVALID_HANDLE, hBB = INVALID_HANDLE;
+int      score = 0;                // score des 12 indicateurs (-10 .. +10)
+double   gaugeSum = 0;             // lecture de la jauge pendant la pause
+int      gaugeN = 0;
+int      flips = 0;                // basculements haussier / baissier pendant la pause
+int      lastSentiment = 0;
 double   worst = 0;
 string   lastEvent = "demarrage";
 string   lastError = "aucune";
@@ -91,6 +102,52 @@ double PriceMove(int seconds)
       ref = pxBuf[i];
    }
    return pxBuf[last] - ref;
+}
+
+double Val(int handle, int buffer)
+{
+   double v[];
+   if(CopyBuffer(handle, buffer, 0, 1, v) < 1) return 0;
+   return v[0];
+}
+
+int Vote(double a, double b)
+{
+   if(a > b) return 1;
+   if(a < b) return -1;
+   return 0;
+}
+
+//--- les 12 indicateurs sur le prix en direct -> score de -10 a +10
+bool ComputeScore()
+{
+   MqlRates r[];
+   ArraySetAsSeries(r, true);
+   if(CopyRates(_Symbol, PERIOD_M1, 0, 25, r) < 25) return false;
+   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double rsi = Val(hRSI, 0), macd = Val(hMACD, 0), sig = Val(hMACD, 1);
+   double e20 = Val(hEMA20, 0), eh1 = Val(hEMAH1, 0), mid = Val(hBB, 0);
+   if(rsi == 0 || e20 == 0 || eh1 == 0 || mid == 0) return false;
+   double hi = r[1].high, lo = r[1].low;
+   for(int i = 1; i <= 20; i++)
+   {
+      if(r[i].high > hi) hi = r[i].high;
+      if(r[i].low < lo) lo = r[i].low;
+   }
+   score = 0;
+   if(rsi > 55) score++;
+   if(rsi < 45) score--;
+   score += Vote(price, eh1);              // tendance H1
+   score += Vote(price, e20);              // ecart MM20
+   score += Vote(macd, sig);               // MACD
+   score += Vote(price, (hi + lo) / 2);    // structure
+   score += Vote(price, mid);              // Bollinger
+   score += Vote(price, r[5].close);       // momentum 5
+   score += Vote(price, r[15].close);      // momentum 15
+   score += Vote(price, r[1].close);       // derniere bougie
+   if(price > hi) score++;                 // cassure
+   if(price < lo) score--;
+   return true;
 }
 
 int CountPositions(double &profit)
@@ -260,14 +317,44 @@ void Step()
          Print(lastEvent);
       }
       if(dayStopped) return;
-      if(TimeTradeServer() < pauseUntil) return;
+      if(TimeTradeServer() < pauseUntil) { gaugeSum = 0; gaugeN = 0; flips = 0; return; }
+
+      // lecture de la jauge pendant la pause (toutes les 250 ms)
+      if(ComputeScore())
+      {
+         gaugeSum += score; gaugeN++;
+         int sent = (score > 0 ? 1 : (score < 0 ? -1 : 0));
+         if(sent != 0 && lastSentiment != 0 && sent != lastSentiment) flips++;
+         if(sent != 0) lastSentiment = sent;
+      }
       if(now - phaseStart < (ulong)PauseSeconds * 1000 || !allowed) return;
+
+      // cote de la jauge (moyenne pendant la pause)
+      double avg = (gaugeN > 0 ? gaugeSum / gaugeN : 0);
+      double buyPct = 50.0 + 5.0 * avg;
+      int gaugeSide = 0;
+      if(buyPct >= MinConfidence) gaugeSide = 1;
+      if(100.0 - buyPct >= MinConfidence) gaugeSide = -1;
+      // cote du contre-courant
       double move = PriceMove(LookbackSeconds);
+      int counterSide = 0;
+      if(move < 0) counterSide = 1;                    // le prix a baisse : achat
+      if(move > 0) counterSide = -1;                   // le prix a monte : vente
+      if(counterSide == 0) counterSide = -lastSide;    // pas de mouvement : on alterne
+
       int side = 0;
-      if(move < 0) side = 1;                          // le prix a baisse : achat
-      if(move > 0) side = -1;                         // le prix a monte : vente
-      if(side == 0) side = -lastSide;                 // pas de mouvement : on alterne
-      if(side == 0) side = 1;
+      if(DirectionMode == 0) side = gaugeSide;
+      if(DirectionMode == 1 && gaugeSide == counterSide) side = gaugeSide;
+      if(DirectionMode == 2) side = counterSide;
+      if(side == 0)
+      {
+         lastEvent = "attend : jauge " + DoubleToString(buyPct, 0) + " % achat / " + DoubleToString(100.0 - buyPct, 0) +
+                     " % vente, confiance insuffisante ou pas d'accord";
+         phaseStart = now - (ulong)PauseSeconds * 1000 + 1000;      // nouvelle lecture d'1 s
+         gaugeSum = 0; gaugeN = 0; flips = 0;
+         return;
+      }
+      gaugeSum = 0; gaugeN = 0; flips = 0;
       if(TrendFilter)
       {
          int tr = TrendSide();
@@ -287,10 +374,10 @@ void Step()
       Print(lastEvent);
       // serie de pertes : pause
       if(result < 0) losingStreak++; else losingStreak = 0;
-      if(StreakPauseMin > 0 && LossStreak > 0 && losingStreak >= LossStreak)
+      if(StreakPauseSec > 0 && LossStreak > 0 && losingStreak >= LossStreak)
       {
-         pauseUntil = TimeTradeServer() + StreakPauseMin * 60;
-         lastEvent = IntegerToString(losingStreak) + " rafales perdantes d'affilee : pause jusqu'a " + TimeToString(pauseUntil, TIME_MINUTES);
+         pauseUntil = TimeTradeServer() + StreakPauseSec;
+         lastEvent = IntegerToString(losingStreak) + " rafales perdantes d'affilee : pause de " + IntegerToString(StreakPauseSec) + " s";
          Print(lastEvent);
          losingStreak = 0;
       }
@@ -350,6 +437,11 @@ int OnInit()
    else trade.SetTypeFilling(ORDER_FILLING_RETURN);
    phaseStart = GetTickCount64();
    hTrend = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
+   hRSI   = iRSI(_Symbol, PERIOD_M1, 14, PRICE_CLOSE);
+   hMACD  = iMACD(_Symbol, PERIOD_M1, 12, 26, 9, PRICE_CLOSE);
+   hEMA20 = iMA(_Symbol, PERIOD_M1, 20, 0, MODE_EMA, PRICE_CLOSE);
+   hEMAH1 = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
+   hBB    = iBands(_Symbol, PERIOD_M1, 20, 0, 2.0, PRICE_CLOSE);
    EventSetMillisecondTimer(250);
    return INIT_SUCCEEDED;
 }
@@ -368,7 +460,7 @@ void OnTimer()
    double profit;
    int n = CountPositions(profit);
    string ph = "PAUSE " + IntegerToString((int)((GetTickCount64() - phaseStart) / 1000)) + "/" + IntegerToString(PauseSeconds) + " s";
-   if(phase == 0 && TimeTradeServer() < pauseUntil) ph = "PAUSE apres une serie de pertes, jusqu'a " + TimeToString(pauseUntil, TIME_MINUTES);
+   if(phase == 0 && TimeTradeServer() < pauseUntil) ph = "PAUSE apres une serie de pertes, jusqu'a " + TimeToString(pauseUntil, TIME_SECONDS);
    if(phase == 0 && dayStopped) ph = "ARRET POUR LA JOURNEE (limite de perte du jour atteinte)";
    if(phase == 1) ph = "RAFALE OUVERTE : on attend +" + DoubleToString(StartClosePct, 1) + " %";
    if(phase == 2) ph = "FERMETURE PROGRESSIVE (plus grosse position gagnante d'abord)";
@@ -377,6 +469,11 @@ void OnTimer()
            "\nPhase : ", ph,
            "\nPositions : ", n, "   resultat en cours : ", DoubleToString(profit, 2),
            "   (", (startBalance > 0 ? DoubleToString(100.0 * profit / startBalance, 2) : "0"), " %)",
+           "\nJAUGE : ACHAT ", DoubleToString(50.0 + 5.0 * score, 0), " %   VENTE ", DoubleToString(50.0 - 5.0 * score, 0), " %   sentiment : ",
+           (score > 0 ? "HAUSSIER" : (score < 0 ? "BAISSIER" : "NEUTRE")), "   (score ", score, ")",
+           "\nLecture pendant la pause : moyenne ", (gaugeN > 0 ? DoubleToString(50.0 + 5.0 * gaugeSum / gaugeN, 0) + " % achat" : "-"),
+           ", basculements ", flips, "   mode : ", (DirectionMode == 0 ? "jauge" : (DirectionMode == 1 ? "jauge + contre-courant" : "contre-courant")),
+           " (confiance min ", DoubleToString(MinConfidence, 0), " %)",
            "\nMouvement du prix sur ", LookbackSeconds, " s : ", DoubleToString(PriceMove(LookbackSeconds), 2),
            "   tendance de fond : ", (TrendSide() > 0 ? "HAUSSIERE (achats sur les creux)" : (TrendSide() < 0 ? "BAISSIERE (ventes sur les rebonds)" : "-")),
            "\nProtections : reduction a -", DoubleToString(ReduceStep1Pct, 1), " % / -", DoubleToString(ReduceStep2Pct, 1),
