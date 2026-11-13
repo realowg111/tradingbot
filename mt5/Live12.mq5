@@ -26,6 +26,8 @@ int    useVotes;
 double useTarget, useLoss;
 int    useSeconds;
 string lastError = "aucune";
+string lastClose = "aucune";
+int bursts = 0;
 
 //+------------------------------------------------------------------+
 double Val(int handle, int buffer)
@@ -109,6 +111,7 @@ void CloseAll(string reason)
       trade.PositionClose(ticket);
    }
    Print("Rafale fermee : ", reason);
+   lastClose = reason + " a " + TimeToString(TimeTradeServer(), TIME_SECONDS);
    burstSide = 0;
 }
 
@@ -125,7 +128,7 @@ void OpenBurst(int side)
 {
    double lots[6] = {0.30, 0.20, 0.15, 0.10, 0.05, 0.05};
    startBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   openTime = TimeCurrent();
+   openTime = TimeTradeServer();
    burstSide = side;
    for(int i = 0; i < 6; i++)
    {
@@ -138,6 +141,7 @@ void OpenBurst(int side)
          Print("Ordre refuse : ", lastError);
       }
    }
+   bursts++;
    Print("Rafale ouverte, score ", score);
 }
 
@@ -148,12 +152,12 @@ void Manage()
    int n = CountPositions(profit);
    if(n == 0) return;
    if(startBalance <= 0) startBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   if(openTime == 0) openTime = TimeCurrent();
+   if(openTime == 0) openTime = TimeTradeServer();
    double pct = 100.0 * profit / startBalance;
    if(pct >= useTarget) { CloseAll("objectif"); return; }
    if(pct <= -useLoss) { CloseAll("limite de perte"); return; }
-   if(useSeconds > 0 && (long)(TimeCurrent() - openTime) >= (long)useSeconds) { CloseAll("duree max (secondes)"); return; }
-   if((long)(TimeCurrent() - openTime) >= (long)MaxMinutes * 60) { CloseAll("duree max"); return; }
+   if(useSeconds > 0 && (long)(TimeTradeServer() - openTime) >= (long)useSeconds) { CloseAll("duree max (secondes)"); return; }
+   if((long)(TimeTradeServer() - openTime) >= (long)MaxMinutes * 60) { CloseAll("duree max"); return; }
 }
 
 //+------------------------------------------------------------------+
@@ -210,6 +214,8 @@ void OnTimer()
    Comment("LIVE 12  -  ", _Symbol,
            "\nTrading autorise : ", allowed,
            "\nDerniere erreur d'ordre : ", lastError,
+           "\nRafales ouvertes : ", bursts, "   derniere fermeture : ", lastClose,
+           "\nHeure serveur : ", TimeToString(TimeTradeServer(), TIME_SECONDS), "   dernier prix recu : ", TimeToString(TimeCurrent(), TIME_SECONDS),
            "\nScore : ", score, " (requis +/-", useVotes, ")",
            "\nMode video : ", (VideoMode ? "OUI" : "non"), "   duree max rafale : ", (useSeconds > 0 ? IntegerToString(useSeconds) + " s" : IntegerToString(MaxMinutes) + " min"),
            "\nACHAT ", DoubleToString(buyPct, 0), " %   VENTE ", DoubleToString(100 - buyPct, 0), " %",
