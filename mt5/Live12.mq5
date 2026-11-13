@@ -45,6 +45,7 @@ int    readCount = 0;
 int    readSum = 0;
 int    burstSide = 0;
 int    burstSize = 0;
+int    maxSeen = 0;          // plus grand nombre de positions vues dans la rafale (ordres executes)
 double startBalance = 0;
 datetime openTime = 0;
 int    bursts = 0, winBursts = 0;
@@ -159,6 +160,7 @@ void OpenBurst(int side)
    openTime = TimeTradeServer();
    burstSide = side;
    burstSize = 0;
+   maxSeen = 0;
    for(int i = 0; i < 6; i++)
    {
       double price, sl, tp;
@@ -261,13 +263,41 @@ double BasketMove()
    return avgOpen - SymbolInfoDouble(_Symbol, SYMBOL_BID);
 }
 
+//--- ordres du robot encore en cours d'execution chez le courtier
+int PendingOrders()
+{
+   int k = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong t = OrderGetTicket(i);
+      if(t == 0) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
+      k++;
+   }
+   return k;
+}
+
 //--- gestion de la rafale ouverte
 void Manage()
 {
    if(phase != 1) return;
    double profit;
    int n = CountPositions(profit);
-   if(n == 0) { EndBurst("toutes les positions fermees (TP / stop)"); return; }
+   long ageNow = (long)(TimeTradeServer() - openTime);
+   // attendre que le courtier ait execute tous les ordres de la rafale (3 s maximum)
+   if(PendingOrders() > 0 || ageNow < 3)
+   {
+      if(n > maxSeen) maxSeen = n;
+      return;
+   }
+   if(n > maxSeen) maxSeen = n;
+   if(n == 0)
+   {
+      if(maxSeen > 0) EndBurst("toutes les positions fermees (TP / stop)");
+      else { phase = 0; readCount = 0; readSum = 0; lastEvent = "aucun ordre execute"; }
+      return;
+   }
 
    double pct = 100.0 * (AccountInfoDouble(ACCOUNT_EQUITY) - startBalance) / startBalance;
    long age = (long)(TimeTradeServer() - openTime);
@@ -283,9 +313,9 @@ void Manage()
 
    if(atr > 0 && move <= -LossATR * atr) { EndBurst("limite de perte (prix contre la rafale)"); return; }
    if(pct <= -HardLossPct) { EndBurst("securite : perte du compte"); return; }
-   if(n == burstSize && age >= CutSeconds && move <= 0) { EndBurst("pas partie dans le bon sens apres " + IntegerToString(CutSeconds) + " s"); return; }
+   if(n == maxSeen && age >= CutSeconds && move <= 0) { EndBurst("pas partie dans le bon sens apres " + IntegerToString(CutSeconds) + " s"); return; }
    if(age >= MaxSeconds) { EndBurst("duree max"); return; }
-   if(n < burstSize) FollowRest();                 // le gros lot est sorti en profit : le reste suit
+   if(n < maxSeen) FollowRest();                   // le gros lot est sorti en profit : le reste suit
 }
 
 //+------------------------------------------------------------------+
@@ -309,7 +339,7 @@ int OnInit()
    double p;
    if(CountPositions(p) > 0)
    {
-      phase = 1; burstSize = 6;
+      phase = 1; burstSize = 6; maxSeen = CountPositions(p);
       startBalance = AccountInfoDouble(ACCOUNT_BALANCE);
       openTime = TimeTradeServer();
    }
@@ -359,7 +389,7 @@ void OnTimer()
    else if(MQLInfoInteger(MQL_TRADE_ALLOWED) == 0) allowed = "NON : cocher 'Autoriser le trading algorithmique'";
    string ph = "ANALYSE " + IntegerToString(readCount) + "/" + IntegerToString(ReadSeconds) + " s";
    if(phase == 1)
-      ph = "RAFALE : " + IntegerToString(n) + "/" + IntegerToString(burstSize) + " positions, " +
+      ph = "RAFALE : " + IntegerToString(n) + "/" + IntegerToString(burstSize) + " positions (ordres en attente : " + IntegerToString(PendingOrders()) + "), " +
            DoubleToString(profit, 2) + ", depuis " + IntegerToString((int)(TimeTradeServer() - openTime)) + " s";
 
    double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
