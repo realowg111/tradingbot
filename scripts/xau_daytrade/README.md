@@ -141,3 +141,19 @@ Pourquoi l'EUR/USD fait pire :
 - Il bouge environ deux fois moins que l'or en pourcentage, pour le même coût. Les frais pèsent donc deux fois plus lourd sur chaque trade.
 - Il n'a pas de tendance de fond sur la période (-1,2 %/an), alors que l'or a monté de 6 à 10 %/an. Les stratégies de cassure profitent moins des longs.
 - C'est le marché le plus liquide et le plus disputé : il reste moins d'écarts de prix exploitables.
+
+## Gestion des sorties « à la vidéo » : petites pertes, plus gros gains (`scalper_exits_backtest.py`)
+
+Mêmes entrées que le scalper à 12 indicateurs (or, 5 min, 2009–2026). On ajoute les techniques de sortie observées dans la vidéo : coupe rapide quand le signal faiblit, stop ramené au prix d'entrée (break-even), stop suiveur.
+
+| Sorties | Gagnants | Gain moyen | Perte moyenne | R moyen sans frais | R moyen frais ECN |
+|---|---|---|---|---|---|
+| Base (TP 0,5 / SL 1,5 ATR) | 71 % | 0,33 R | 0,96 R | -0,04 | -0,10 |
+| Coupe rapide | 47 % | 0,99 R | 0,94 R | -0,04 | -0,14 |
+| Coupe + break-even | 36 % | 0,99 R | 0,84 R | -0,04 | -0,14 |
+| Coupe + break-even + stop suiveur, sans TP | 35 % | **1,20 R** | **0,83 R** | **+0,02** | -0,08 |
+| Coupe + stop suiveur, TP 3 ATR | 35 % | 1,17 R | 0,83 R | +0,01 | -0,09 |
+
+Grille de 27 combinaisons avec frais ECN : 0 positive. Les meilleures obtiennent bien des pertes moyennes (0,6 R) deux fois plus petites que les gains moyens (1,2 R), mais elles ne gagnent que 28 à 30 % de leurs trades.
+
+Conclusion : ces techniques changent la forme des résultats (moins de gagnants, mais des gains plus gros que les pertes), pas leur somme. Sans frais, le stop suiveur arrive à peine au-dessus de zéro (+0,02 R par trade), et seulement avant 2018. Avec environ 18 trades par jour, les frais (environ 0,1 R par trade) font repasser le résultat dans le négatif. Une vidéo qui ne montre que des pertes de -0,10 € et des gains de +10 € montre une série favorable, pas la moyenne.
