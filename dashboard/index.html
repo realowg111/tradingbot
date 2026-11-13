@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scalper 12 Live</title>
+<style>
+:root{
+  --bg:#070b2a; --panel:#0e1546; --panel2:#121b5c; --line:#2a3a9a; --text:#e6ecff; --muted:#8f9bd6;
+  --cyan:#3ee8ff; --green:#33f5a0; --red:#ff4d6d; --amber:#ffb020; --violet:#a66bff;
+}
+*{box-sizing:border-box}
+body{margin:0;background:radial-gradient(1200px 600px at 20% -10%,#1b2a8a 0%,var(--bg) 55%);color:var(--text);
+  font:14px/1.4 "Segoe UI",Roboto,Arial,sans-serif;min-height:100vh}
+.wrap{max-width:1400px;margin:0 auto;padding:12px 16px 32px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;
+  background:linear-gradient(90deg,#101a63,#0b1240);border:1px solid var(--line);border-radius:12px;padding:10px 16px}
+.brand{display:flex;align-items:center;gap:10px}
+.logo{width:38px;height:38px;border-radius:50%;background:conic-gradient(var(--cyan),var(--violet),var(--cyan));
+  box-shadow:0 0 18px var(--cyan)}
+.brand h1{margin:0;font-size:18px;letter-spacing:2px}
+.brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:1px}
+.online{font-size:11px;padding:3px 8px;border-radius:20px;border:1px solid var(--green);color:var(--green)}
+.online.off{border-color:var(--red);color:var(--red)}
+.meta{display:flex;gap:18px;flex-wrap:wrap}
+.meta div{text-align:right}
+.meta b{display:block;font-size:13px;letter-spacing:1px}
+.meta span{font-size:10px;color:var(--muted);letter-spacing:2px;text-transform:uppercase}
+.clock b{font-size:26px;color:var(--cyan);font-variant-numeric:tabular-nums;text-shadow:0 0 12px var(--cyan)}
+.warn{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;margin:10px 0}
+.pill{padding:4px 12px;border-radius:6px;font-size:11px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase}
+.pill.r{background:var(--red);color:#fff}.pill.a{background:var(--amber);color:#1b1300}
+.pill.s{background:#ffffff14;color:var(--muted);border:1px solid var(--line)}
+.title{text-align:center;font-weight:800;letter-spacing:4px;font-size:15px;margin:2px 0 10px;color:#fff}
+.grid{display:grid;gap:12px}
+.kpis{grid-template-columns:repeat(6,1fr)}
+.card{background:linear-gradient(180deg,var(--panel2),var(--panel));border:1px solid var(--line);border-radius:12px;padding:12px 14px;
+  position:relative;overflow:hidden;min-width:0}
+.card h3{margin:0 0 6px;font-size:10px;letter-spacing:2px;color:var(--muted);text-transform:uppercase;font-weight:700}
+.big{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;white-space:nowrap}
+.sub{font-size:11px;color:var(--muted)}
+.pos{color:var(--green)}.neg{color:var(--red)}
+.bar{height:6px;border-radius:4px;background:#ffffff14;margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--violet),var(--cyan))}
+.main{grid-template-columns:1.1fr 1fr 1fr;margin-top:12px}
+canvas{width:100%;display:block}
+.gauge-txt{text-align:center;margin-top:4px}
+.tbl{overflow-x:auto}
+.gauge-txt b{font-size:26px;letter-spacing:3px}
+.split{display:flex;justify-content:space-between;margin-top:6px}
+.split div{text-align:center;flex:1}
+.split b{font-size:20px}
+table{width:100%;border-collapse:collapse;font-size:12px;font-variant-numeric:tabular-nums}
+th{color:var(--muted);font-weight:600;text-align:left;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:4px 6px}
+td{padding:5px 6px;border-top:1px solid #ffffff10;white-space:nowrap}
+.tag{padding:1px 7px;border-radius:4px;font-size:10px;font-weight:800;letter-spacing:1px}
+.tag.b{background:#33f5a022;color:var(--green);border:1px solid var(--green)}
+.tag.s{background:#ff4d6d22;color:var(--red);border:1px solid var(--red)}
+.journal{font-family:Consolas,Menlo,monospace;font-size:12px;max-height:300px;overflow:auto}
+.journal div{padding:3px 0;border-bottom:1px solid #ffffff08;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.journal .g{color:var(--green)}.journal .r{color:var(--red)}.journal .c{color:var(--cyan)}.journal .y{color:var(--amber)}
+.lower{grid-template-columns:1fr 1fr 1fr;margin-top:12px}
+.empty{color:var(--muted);text-align:center;padding:18px 0;font-size:12px}
+.banner{display:none;margin:8px 0;padding:8px 12px;border-radius:8px;background:#ffb02022;border:1px solid var(--amber);color:var(--amber);
+  text-align:center;font-weight:700;letter-spacing:1px}
+.foot{margin-top:14px;text-align:center;color:var(--muted);font-size:11px}
+@media (max-width:1100px){.kpis{grid-template-columns:repeat(3,1fr)}.main,.lower{grid-template-columns:1fr}}
+@media (max-width:560px){.kpis{grid-template-columns:repeat(2,1fr)}.big{font-size:19px}.clock b{font-size:20px}
+  .meta{gap:10px}.meta div{text-align:left}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="brand"><div class="logo"></div>
+      <div><h1>SCALPER 12</h1><small>INTELLIGENCE ARTIFICIELLE &middot; 12 INDICATEURS</small></div>
+      <span id="online" class="online off">HORS LIGNE</span></div>
+    <div class="meta">
+      <div><span>Compte</span><b id="acc">-</b></div>
+      <div><span>Serveur</span><b id="srv">-</b></div>
+      <div><span>Devise</span><b id="cur">-</b></div>
+      <div><span>Symbole / mode</span><b id="sym">-</b></div>
+      <div class="clock"><span id="date">-</span><b id="clock">--:--:--</b></div>
+    </div>
+  </header>
+
+  <div id="sample" class="banner">DONNÉES D'EXEMPLE : lancez le robot dans MT5 pour voir vos vraies données</div>
+  <div class="warn"><span class="pill r">Capital à risque</span><span class="pill a">Aucun gain garanti</span>
+    <span class="pill s">Les performances passées ne garantissent pas les résultats futurs</span></div>
+
+  <div class="grid kpis">
+    <div class="card"><h3>Solde</h3><div class="big" id="bal">-</div><div class="sub">compte en direct</div></div>
+    <div class="card"><h3>Équité</h3><div class="big" id="eq">-</div><div class="sub">solde + positions ouvertes</div></div>
+    <div class="card"><h3>P&amp;L en cours</h3><div class="big" id="flt">-</div><div class="sub" id="opn">-</div></div>
+    <div class="card"><h3>Bénéfice du jour</h3><div class="big" id="day">-</div><div class="sub">positions clôturées aujourd'hui</div></div>
+    <div class="card"><h3>Taux de réussite</h3><div class="big" id="wr">-</div><div class="sub" id="wrs">-</div><div class="bar"><i id="wrb" style="width:0"></i></div></div>
+    <div class="card"><h3>Gains vs pertes</h3><div class="big" id="exp">-</div><div class="sub" id="exps">-</div></div>
+  </div>
+
+  <div class="grid main">
+    <div class="card"><h3>Réseau de décision &middot; 12 entrées <span style="float:right" id="calc">calcul n° -</span></h3>
+      <canvas id="nn" height="300"></canvas>
+      <div class="split"><div><span class="sub">▲ ACHAT</span><br><b class="pos" id="pb">-</b></div>
+        <div><span class="sub">signaux alignés</span><br><b id="al">-</b></div>
+        <div><span class="sub">▼ VENTE</span><br><b class="neg" id="ps">-</b></div></div>
+    </div>
+    <div class="card"><h3>Sentiment &amp; confiance</h3>
+      <canvas id="gauge" height="190"></canvas>
+      <div class="gauge-txt"><b id="sent">-</b><div class="sub" id="conf">-</div></div>
+      <div class="split" style="margin-top:14px"><div><span class="sub">Tendance du jour</span><br><b id="reg" style="font-size:14px">-</b></div>
+        <div><span class="sub">Latence ordre</span><br><b id="lat" style="font-size:14px">-</b></div></div>
+    </div>
+    <div class="card"><h3>Positions ouvertes</h3><div id="positions" class="tbl"></div></div>
+  </div>
+
+  <div class="grid lower">
+    <div class="card"><h3>Courbe d'équité <span style="float:right" id="eqr">-</span></h3><canvas id="curve" height="220"></canvas></div>
+    <div class="card"><h3>Journal de l'IA</h3><div class="journal" id="journal"></div></div>
+    <div class="card"><h3>Historique des clôtures</h3><div id="closes" class="tbl"></div></div>
+  </div>
+  <div class="foot">Mise à jour chaque seconde depuis MetaTrader 5 &middot; <span id="upd">-</span></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let S = null, cur = '€';
+const money = v => (v >= 0 ? '' : '-') + Math.abs(v).toLocaleString('fr-FR', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' ' + cur;
+const signed = v => (v > 0 ? '+' : '') + money(v);
+const cls = (el, v) => { el.classList.toggle('pos', v > 0); el.classList.toggle('neg', v < 0); };
+
+function setupCanvas(c) {
+  const r = window.devicePixelRatio || 1, w = c.clientWidth, h = c.height / 1;
+  if (!c._h) c._h = c.height;
+  c.width = w * r; c.height = c._h * r; c.style.height = c._h + 'px';
+  const x = c.getContext('2d'); x.setTransform(r, 0, 0, r, 0, 0); return [x, w, c._h];
+}
+
+function drawNN(t) {
+  const [x, w, h] = setupCanvas($('nn'));
+  x.clearRect(0, 0, w, h);
+  if (!S) return;
+  const ind = S.indicators, n = ind.length, left = Math.min(150, w * .38), right = w - 28;
+  const layers = [n, 7, 5, 2];
+  const pts = layers.map((m, li) => Array.from({length: m}, (_, i) => [left + (right - left) * li / (layers.length - 1), 16 + (h - 32) * (m === 1 ? .5 : i / (m - 1))]));
+  for (let li = 0; li < layers.length - 1; li++)
+    for (const a of pts[li]) for (const b of pts[li + 1]) {
+      const k = (Math.sin(t / 700 + a[1] * .05 + b[1] * .03) + 1) / 2;
+      x.strokeStyle = `rgba(${li % 2 ? '166,107,255' : '62,232,255'},${.05 + .15 * k})`;
+      x.beginPath(); x.moveTo(a[0], a[1]); x.lineTo(b[0], b[1]); x.stroke();
+    }
+  x.font = '11px Segoe UI, Arial';
+  pts[0].forEach((p, i) => {
+    const v = ind[i].vote, col = v > 0 ? '#33f5a0' : v < 0 ? '#ff4d6d' : '#8f9bd6';
+    x.textAlign = 'left'; x.fillStyle = '#8f9bd6'; x.fillText(ind[i].name, 2, p[1] + 4);
+    x.textAlign = 'right'; x.fillStyle = col; x.fillText((ind[i].value >= 0 ? '+' : '') + ind[i].value.toFixed(2), p[0] - 10, p[1] + 4);
+    x.beginPath(); x.arc(p[0], p[1], 5, 0, 7); x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 10; x.fill(); x.shadowBlur = 0;
+  });
+  for (let li = 1; li < layers.length - 1; li++) pts[li].forEach((p, i) => {
+    const k = (Math.sin(t / 400 + i + li) + 1) / 2;
+    x.beginPath(); x.arc(p[0], p[1], 4 + 2 * k, 0, 7); x.fillStyle = `rgba(230,236,255,${.5 + .5 * k})`; x.fill();
+  });
+  const out = pts[layers.length - 1];
+  [[S.p_buy, '#3ee8ff'], [1 - S.p_buy, '#ff4d6d']].forEach(([p, col], i) => {
+    x.beginPath(); x.arc(out[i][0], out[i][1], 6 + 10 * p, 0, 7); x.fillStyle = col; x.shadowColor = col; x.shadowBlur = 18; x.fill(); x.shadowBlur = 0;
+  });
+}
+
+function drawGauge() {
+  const [x, w, h] = setupCanvas($('gauge'));
+  x.clearRect(0, 0, w, h);
+  if (!S) return;
+  const cx = w / 2, cy = h - 14, r = Math.min(w / 2 - 20, h - 30);
+  const g = x.createLinearGradient(cx - r, 0, cx + r, 0);
+  g.addColorStop(0, '#ff4d6d'); g.addColorStop(.5, '#a66bff'); g.addColorStop(1, '#33f5a0');
+  x.lineWidth = 16; x.lineCap = 'round'; x.strokeStyle = '#ffffff12';
+  x.beginPath(); x.arc(cx, cy, r, Math.PI, 2 * Math.PI); x.stroke();
+  x.strokeStyle = g; x.beginPath(); x.arc(cx, cy, r, Math.PI, 2 * Math.PI); x.stroke();
+  const a = Math.PI + Math.PI * S.p_buy;
+  x.strokeStyle = '#fff'; x.lineWidth = 4;
+  x.beginPath(); x.moveTo(cx, cy); x.lineTo(cx + Math.cos(a) * (r - 22), cy + Math.sin(a) * (r - 22)); x.stroke();
+  x.beginPath(); x.arc(cx, cy, 8, 0, 7); x.fillStyle = '#fff'; x.fill();
+}
+
+function drawCurve() {
+  const [x, w, h] = setupCanvas($('curve'));
+  x.clearRect(0, 0, w, h);
+  const pts = S ? S.equity_curve : [];
+  if (!pts || pts.length < 2) { x.fillStyle = '#8f9bd6'; x.font = '12px Segoe UI'; x.textAlign = 'center'; x.fillText('La courbe se remplit toutes les 5 minutes', w / 2, h / 2); return; }
+  const vs = pts.map(p => p[1]), lo = Math.min(...vs), hi = Math.max(...vs), pad = (hi - lo) * .1 || 1;
+  const X = i => 8 + (w - 16) * i / (pts.length - 1), Y = v => h - 18 - (h - 30) * (v - lo + pad) / (hi - lo + 2 * pad);
+  const g = x.createLinearGradient(0, 0, 0, h); g.addColorStop(0, 'rgba(166,107,255,.55)'); g.addColorStop(1, 'rgba(166,107,255,0)');
+  x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(X(i), Y(p[1])) : x.moveTo(X(i), Y(p[1])));
+  x.lineTo(X(pts.length - 1), h); x.lineTo(X(0), h); x.closePath(); x.fillStyle = g; x.fill();
+  x.beginPath(); pts.forEach((p, i) => i ? x.lineTo(X(i), Y(p[1])) : x.moveTo(X(i), Y(p[1])));
+  x.strokeStyle = '#c9a7ff'; x.lineWidth = 2; x.stroke();
+  const ch = vs[vs.length - 1] - vs[0];
+  $('eqr').textContent = signed(ch); cls($('eqr'), ch);
+}
+
+function render() {
+  if (!S) return;
+  cur = S.currency === 'EUR' ? '€' : S.currency === 'USD' ? '$' : S.currency;
+  $('acc').textContent = S.account; $('srv').textContent = S.server; $('cur').textContent = S.currency;
+  $('sym').textContent = S.symbol + ' · ' + S.mode;
+  $('sample').style.display = S.sample ? 'block' : 'none';
+  $('bal').textContent = money(S.balance); $('eq').textContent = money(S.equity);
+  $('flt').textContent = signed(S.floating); cls($('flt'), S.floating);
+  $('opn').textContent = S.open_count + ' position(s) ouverte(s)';
+  $('day').textContent = signed(S.today); cls($('day'), S.today);
+  const wr = S.trades ? 100 * S.wins / S.trades : 0;
+  $('wr').textContent = wr.toFixed(0) + ' %'; $('wrs').textContent = S.wins + ' gagnants sur ' + S.trades + ' trades · ' + S.trades_today + ' aujourd\'hui';
+  $('wrb').style.width = wr + '%';
+  $('exp').textContent = signed(S.expectancy) + ' / trade'; cls($('exp'), S.expectancy);
+  $('exps').textContent = 'gain moyen ' + money(S.avg_win) + ' · perte moyenne ' + money(S.avg_loss);
+  $('calc').textContent = 'calcul n° ' + S.calc;
+  $('pb').textContent = (100 * S.p_buy).toFixed(1) + ' %'; $('ps').textContent = (100 * (1 - S.p_buy)).toFixed(1) + ' %';
+  $('al').textContent = S.aligned + '/12';
+  const bull = S.p_buy >= .5;
+  $('sent').textContent = Math.abs(S.score) < 3 ? 'NEUTRE' : bull ? 'HAUSSIER' : 'BAISSIER';
+  $('sent').style.color = Math.abs(S.score) < 3 ? '#8f9bd6' : bull ? '#33f5a0' : '#ff4d6d';
+  $('conf').textContent = 'confiance ' + (100 * Math.max(S.p_buy, 1 - S.p_buy)).toFixed(0) + ' % · score ' + (S.score > 0 ? '+' : '') + S.score;
+  $('reg').textContent = !S.trend_filter ? 'filtre désactivé' : S.regime > 0 ? 'HAUSSIÈRE' : S.regime < 0 ? 'BAISSIÈRE' : 'neutre';
+  $('reg').style.color = S.regime > 0 ? '#33f5a0' : S.regime < 0 ? '#ff4d6d' : '#8f9bd6';
+  $('lat').textContent = S.latency_ms ? S.latency_ms + ' ms' : '-';
+  $('positions').innerHTML = S.positions.length ? '<table><tr><th>Sens</th><th>Lot</th><th>Entrée → actuel</th><th>Ouverte</th><th>P&L</th></tr>' +
+    S.positions.map(p => `<tr><td><span class="tag ${p.side === 'BUY' ? 'b' : 's'}">${p.side}</span></td><td>${p.lot.toFixed(2)}</td>
+      <td>${p.entry} → ${p.current}</td><td>${p.opened}</td><td class="${p.pnl >= 0 ? 'pos' : 'neg'}">${signed(p.pnl)}</td></tr>`).join('') + '</table>'
+    : '<div class="empty">Aucune position ouverte · surveillance du marché</div>';
+  $('closes').innerHTML = S.closes.length ? '<table><tr><th>Heure</th><th>Sens</th><th>Lot</th><th>Entrée</th><th>Sortie</th><th>Résultat</th></tr>' +
+    S.closes.map(c => `<tr><td>${c.time}</td><td><span class="tag ${c.side === 'BUY' ? 'b' : 's'}">${c.side}</span></td><td>${c.lot.toFixed(2)}</td>
+      <td>${c.entry}</td><td>${c.exit}</td><td class="${c.pnl >= 0 ? 'pos' : 'neg'}">${signed(c.pnl)}</td></tr>`).join('') + '</table>'
+    : '<div class="empty">Pas encore de clôture</div>';
+  $('journal').innerHTML = S.journal.map(l => {
+    const c = /Prise de benefice|Position ouverte/.test(l) ? 'g' : /Stop|Cloture.*-|refuse|Arret/.test(l) ? 'r' : /Signal/.test(l) ? 'y' : 'c';
+    return `<div class="${c}" title="${l.replace(/"/g, '')}">${l}</div>`;
+  }).join('');
+  $('upd').textContent = 'heure serveur ' + S.server_time + ' · New York ' + S.ny_time;
+  drawGauge(); drawCurve();
+}
+
+async function poll() {
+  try {
+    const r = await fetch('status.json?t=' + Date.now(), {cache: 'no-store'});
+    if (!r.ok) throw 0;
+    S = await r.json();
+    const fresh = S.sample || (Date.now() / 1000 - S.updated) < 15;
+    $('online').textContent = S.sample ? 'EXEMPLE' : fresh ? 'IA EN LIGNE' : 'ROBOT INACTIF';
+    $('online').classList.toggle('off', !fresh);
+    render();
+  } catch (e) {
+    $('online').textContent = 'HORS LIGNE'; $('online').classList.add('off');
+  }
+}
+function tick(t) {
+  const d = new Date();
+  $('clock').textContent = d.toLocaleTimeString('fr-FR');
+  $('date').textContent = d.toLocaleDateString('fr-FR', {weekday: 'long', day: 'numeric', month: 'long'});
+  drawNN(t); requestAnimationFrame(tick);
+}
+window.addEventListener('resize', () => { drawGauge(); drawCurve(); });
+poll(); setInterval(poll, 1000); requestAnimationFrame(tick);
+</script>
+</body>
+</html>

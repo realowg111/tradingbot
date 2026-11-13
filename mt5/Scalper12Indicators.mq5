@@ -20,7 +20,7 @@
 //| (about -4 %/yr at 0.5 % risk, Nasdaq 2014-2024). Demo first.     |
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
-#property version   "2.00"
+#property version   "3.00"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -66,6 +66,7 @@ input int    ServerMinusNY     = 7;      // Decalage serveur - New York en heure
 input group "Divers"
 input long   Magic             = 12121212;
 input bool   WriteCsvLog       = true;
+input bool   ExportDashboard   = true;   // Ecrire l'etat pour le tableau de bord web (dossier Common\Files)
 
 #define OPEN_MIN  570
 #define SESSION_N 390
@@ -93,6 +94,14 @@ int      g_votes[12];
 double   g_pBuy = 0.5;
 int      g_score = 0;
 double   g_atr = 0;
+
+// dashboard state
+long     g_calc = 0;                 // number of analysis cycles
+double   g_latencyMs = 0;            // last order round trip
+double   g_eqHist[];                 // equity every 5 minutes
+long     g_eqTime[];
+datetime g_lastEqSample = 0;
+int      g_lastBias = 99;
 
 // noise-boundary regime
 int      g_nbDay = -1;
@@ -391,6 +400,14 @@ void Cycle()
    if(p_trend) UpdateRegime();
    MqlRates r[];
    if(!Read(r)) return;
+   g_calc++;
+   int aligned = MathAbs(g_score);
+   int biasKey = (g_score > 0 ? 1 : (g_score < 0 ? -1 : 0)) * 100 + aligned;
+   if(aligned >= 6 && biasKey != g_lastBias)
+   {
+      g_lastBias = biasKey;
+      J(StringFormat("Analyse %s : biais %s, %d/12 signaux, RSI %.1f", _Symbol, g_score > 0 ? "acheteur" : "vendeur", aligned + 1, g_vals[0]));
+   }
    if(g_halted) return;
    if(p_window)
    {
@@ -436,9 +453,11 @@ void Cycle()
    double sl = NormalizeDouble(price - side * slD, digits), tp = NormalizeDouble(price + side * tpD, digits);
    J(StringFormat("Signal %s valide : %d/10 votes, confiance %.0f%%%s", side > 0 ? "d'achat" : "de vente", MathAbs(g_score),
                   (side > 0 ? g_pBuy : 1 - g_pBuy) * 100, p_trend ? ", tendance du jour OK" : ""));
+   ulong t0 = GetMicrosecondCount();
    bool ok = side > 0 ? trade.Buy(lots, _Symbol, 0, sl, tp, "S12 " + p_name) : trade.Sell(lots, _Symbol, 0, sl, tp, "S12 " + p_name);
-   if(ok) J(StringFormat("Position ouverte : %s %.2f lot a %s, TP %s, SL %s", side > 0 ? "Buy" : "Sell", lots,
-            DoubleToString(price, digits), DoubleToString(tp, digits), DoubleToString(sl, digits)));
+   g_latencyMs = (GetMicrosecondCount() - t0) / 1000.0;
+   if(ok) J(StringFormat("Position ouverte : %s %.2f lot a %s, TP %s, SL %s (%.0f ms)", side > 0 ? "Buy" : "Sell", lots,
+            DoubleToString(price, digits), DoubleToString(tp, digits), DoubleToString(sl, digits), g_latencyMs));
    else J("Ordre refuse : code " + IntegerToString(trade.ResultRetcode()));
 }
 
@@ -499,6 +518,133 @@ void Panel()
 }
 
 //+------------------------------------------------------------------+
+//| Broker-side exits (TP / SL) go to the journal                    |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD || !HistoryDealSelect(trans.deal)) return;
+   if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != Magic || HistoryDealGetInteger(trans.deal, DEAL_ENTRY) != DEAL_ENTRY_OUT) return;
+   long reason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+   if(reason != DEAL_REASON_TP && reason != DEAL_REASON_SL) return;          // EA closes are already logged
+   double p = HistoryDealGetDouble(trans.deal, DEAL_PROFIT) + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
+   J(StringFormat("%s : %+.2f %s - %s a %s", reason == DEAL_REASON_TP ? "Prise de benefice" : "Stop touche", p,
+                  AccountInfoString(ACCOUNT_CURRENCY), _Symbol,
+                  DoubleToString(HistoryDealGetDouble(trans.deal, DEAL_PRICE), (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS))));
+}
+
+//+------------------------------------------------------------------+
+//| Live status for the web dashboard (MT5 Common\Files)            |
+//+------------------------------------------------------------------+
+string Esc(string s) { StringReplace(s, "\\", "/"); StringReplace(s, "\"", "'"); return s; }
+string N(double v, int d = 2) { return DoubleToString(v, d); }
+
+void SampleEquity()
+{
+   if(TimeCurrent() - g_lastEqSample < 300) return;
+   g_lastEqSample = TimeCurrent();
+   int n = ArraySize(g_eqHist);
+   if(n >= 2016) { ArrayRemove(g_eqHist, 0, 1); ArrayRemove(g_eqTime, 0, 1); n--; }
+   ArrayResize(g_eqHist, n + 1); ArrayResize(g_eqTime, n + 1);
+   g_eqHist[n] = AccountInfoDouble(ACCOUNT_EQUITY); g_eqTime[n] = (long)TimeCurrent();
+}
+
+void ExportJson()
+{
+   if(!ExportDashboard) return;
+   SampleEquity();
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   string login = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+   string masked = StringLen(login) > 4 ? StringSubstr(login, 0, 2) + "..." + StringSubstr(login, StringLen(login) - 2) : login;
+
+   // closed-trade statistics
+   int trades = 0, wins = 0, todayN = 0; double sw = 0, sl = 0, today = 0;
+   MqlDateTime d; TimeToStruct(TimeCurrent(), d); d.hour = 0; d.min = 0; d.sec = 0;
+   datetime dayStart = StructToTime(d);
+   string closes = "";
+   int ncl = 0;
+   if(HistorySelect(0, TimeCurrent()))
+   {
+      int total = HistoryDealsTotal();
+      for(int i = 0; i < total; i++)
+      {
+         ulong t = HistoryDealGetTicket(i);
+         if(HistoryDealGetInteger(t, DEAL_MAGIC) != Magic || HistoryDealGetInteger(t, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+         double p = HistoryDealGetDouble(t, DEAL_PROFIT) + HistoryDealGetDouble(t, DEAL_COMMISSION) + HistoryDealGetDouble(t, DEAL_SWAP);
+         trades++; if(p > 0) { wins++; sw += p; } else sl += -p;
+         if((datetime)HistoryDealGetInteger(t, DEAL_TIME) >= dayStart) { today += p; todayN++; }
+      }
+      for(int i = total - 1; i >= 0 && ncl < 20; i--)                 // last 20 closures
+      {
+         ulong t = HistoryDealGetTicket(i);
+         if(HistoryDealGetInteger(t, DEAL_MAGIC) != Magic || HistoryDealGetInteger(t, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+         long pid = HistoryDealGetInteger(t, DEAL_POSITION_ID);
+         double entry = 0;
+         for(int k = i - 1; k >= 0; k--)
+         {
+            ulong u = HistoryDealGetTicket(k);
+            if(HistoryDealGetInteger(u, DEAL_POSITION_ID) == pid && HistoryDealGetInteger(u, DEAL_ENTRY) == DEAL_ENTRY_IN)
+            { entry = HistoryDealGetDouble(u, DEAL_PRICE); break; }
+         }
+         double p = HistoryDealGetDouble(t, DEAL_PROFIT) + HistoryDealGetDouble(t, DEAL_COMMISSION) + HistoryDealGetDouble(t, DEAL_SWAP);
+         string side = HistoryDealGetInteger(t, DEAL_TYPE) == DEAL_TYPE_SELL ? "BUY" : "SELL";   // closing deal is opposite
+         closes += (ncl ? "," : "") + StringFormat("{\"time\":\"%s\",\"side\":\"%s\",\"lot\":%s,\"entry\":%s,\"exit\":%s,\"pnl\":%s}",
+                   TimeToString((datetime)HistoryDealGetInteger(t, DEAL_TIME), TIME_MINUTES | TIME_SECONDS), side,
+                   N(HistoryDealGetDouble(t, DEAL_VOLUME)), N(entry, digits), N(HistoryDealGetDouble(t, DEAL_PRICE), digits), N(p));
+         ncl++;
+      }
+   }
+
+   // open positions
+   string pos = ""; int npos = 0; double floating = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(!PositionSelectByTicket(t)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || PositionGetInteger(POSITION_MAGIC) != Magic) continue;
+      double p = PositionGetDouble(POSITION_PROFIT);
+      floating += p;
+      pos += (npos ? "," : "") + StringFormat("{\"side\":\"%s\",\"lot\":%s,\"entry\":%s,\"current\":%s,\"sl\":%s,\"tp\":%s,\"opened\":\"%s\",\"pnl\":%s}",
+             PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? "BUY" : "SELL", N(PositionGetDouble(POSITION_VOLUME)),
+             N(PositionGetDouble(POSITION_PRICE_OPEN), digits), N(PositionGetDouble(POSITION_PRICE_CURRENT), digits),
+             N(PositionGetDouble(POSITION_SL), digits), N(PositionGetDouble(POSITION_TP), digits),
+             TimeToString((datetime)PositionGetInteger(POSITION_TIME), TIME_SECONDS), N(p));
+      npos++;
+   }
+
+   int alignedN = 0, dir = g_score > 0 ? 1 : (g_score < 0 ? -1 : 0);
+   string ind = "";
+   for(int i = 0; i < 12; i++)
+   {
+      if(dir != 0 && g_votes[i] == dir) alignedN++;
+      ind += (i ? "," : "") + StringFormat("{\"name\":\"%s\",\"value\":%s,\"vote\":%d}", g_names[i], N(g_vals[i]), g_votes[i]);
+   }
+   string jr = "";
+   for(int i = 0; i < g_jn; i++) jr += (i ? "," : "") + "\"" + Esc(g_journal[i]) + "\"";
+   string eqs = "";
+   for(int i = 0; i < ArraySize(g_eqHist); i++) eqs += (i ? "," : "") + StringFormat("[%I64d,%s]", g_eqTime[i], N(g_eqHist[i]));
+
+   string js = "{";
+   js += StringFormat("\"symbol\":\"%s\",\"mode\":\"%s\",\"account\":\"%s\",\"server\":\"%s\",\"currency\":\"%s\",",
+                      _Symbol, p_name, masked, Esc(AccountInfoString(ACCOUNT_SERVER)), AccountInfoString(ACCOUNT_CURRENCY));
+   js += StringFormat("\"server_time\":\"%s\",\"ny_time\":\"%s\",\"updated\":%I64d,",
+                      TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS), TimeToString(ToNY(TimeCurrent()), TIME_MINUTES), (long)TimeLocal());
+   js += StringFormat("\"balance\":%s,\"equity\":%s,\"floating\":%s,\"today\":%s,\"trades_today\":%d,\"open_count\":%d,",
+                      N(AccountInfoDouble(ACCOUNT_BALANCE)), N(AccountInfoDouble(ACCOUNT_EQUITY)), N(floating), N(today), todayN, npos);
+   js += StringFormat("\"trades\":%d,\"wins\":%d,\"avg_win\":%s,\"avg_loss\":%s,\"expectancy\":%s,",
+                      trades, wins, N(wins ? sw / wins : 0), N((trades - wins) ? sl / (trades - wins) : 0), N(trades ? (sw - sl) / trades : 0));
+   js += StringFormat("\"p_buy\":%s,\"score\":%d,\"aligned\":%d,\"regime\":%d,\"trend_filter\":%s,\"calc\":%I64d,\"latency_ms\":%s,\"halted\":%s,",
+                      N(g_pBuy, 4), g_score, alignedN, g_regime, p_trend ? "true" : "false", g_calc, N(g_latencyMs, 0), g_halted ? "true" : "false");
+   js += "\"indicators\":[" + ind + "],\"positions\":[" + pos + "],\"closes\":[" + closes + "],";
+   js += "\"journal\":[" + jr + "],\"equity_curve\":[" + eqs + "]}";
+
+   int h = FileOpen("Scalper12_status.tmp", FILE_WRITE | FILE_TXT | FILE_ANSI | FILE_COMMON);
+   if(h == INVALID_HANDLE) return;
+   FileWriteString(h, js);
+   FileClose(h);
+   FileMove("Scalper12_status.tmp", FILE_COMMON, "Scalper12_status.json", FILE_COMMON | FILE_REWRITE);
+}
+
+//+------------------------------------------------------------------+
 int OnInit()
 {
    ApplyPreset();
@@ -536,5 +682,23 @@ void OnTick()
    }
 }
 
-void OnTimer() { Panel(); }
+void OnTimer()
+{
+   Panel();
+   ExportJson();
+   static datetime lastFollow = 0;
+   double e; int n = CountPositions(0, e, 0);
+   if(n > 0 && TimeCurrent() - lastFollow >= 300)
+   {
+      lastFollow = TimeCurrent();
+      double pnl = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong t = PositionGetTicket(i);
+         if(PositionSelectByTicket(t) && PositionGetInteger(POSITION_MAGIC) == Magic && PositionGetString(POSITION_SYMBOL) == _Symbol)
+            pnl += PositionGetDouble(POSITION_PROFIT);
+      }
+      J(StringFormat("Suivi de %d position(s) - P&L %+.2f", n, pnl));
+   }
+}
 //+------------------------------------------------------------------+
