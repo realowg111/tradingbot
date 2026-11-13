@@ -114,11 +114,24 @@ Le testeur MT5 en ticks réels chez votre courtier donnera le verdict final.
 
 Tous ces nombres sont réglables dans le groupe « Mode SECONDES ». Ce mode ne peut pas être vérifié sur mes données en bougies d'1 minute : il se teste dans le testeur MT5 en **« Chaque tick basé sur des ticks réels »**, puis sur le compte démo.
 
+## Mode RAFALE (`Preset = RAFALE`) : reproduit le journal de la vidéo
+
+Dans la vidéo, à 09:06:12, six achats sont ouverts dans la même seconde (0,05 / 0,05 / 0,10 / 0,15 / 0,20 / 0,30 lot). Ils se ferment un par un entre 09:06:14 et 09:06:18 avec +11,34 €, +6,77 €, +1,89 €, +0,58 €, +2,86 € et +3,81 €, pendant que le prix monte de 3963,9 à 3964,75. Ce mode reproduit cette boucle :
+
+1. **Un calcul toutes les 5 secondes** : les 12 indicateurs donnent ACHAT % / VENTE % et le nombre de votes alignés.
+2. **Signal validé** dès que 7 votes sur 10 sont alignés : le robot ouvre une **rafale de 6 positions d'un coup** (`RafaleLots` = 0,30 / 0,20 / 0,15 / 0,10 / 0,05 / 0,05).
+3. **Chaque position a son propre TP** (`RafaleTPsATR` = 0,10 / 0,15 / 0,20 / 0,30 / 0,45 / 0,60 ATR). La plus grosse prend son bénéfice en premier, sur le tout début du mouvement, et les petites visent plus loin.
+4. **Stop commun** à 0,5 ATR. Après le premier TP, le stop des positions restantes passe au prix d'entrée.
+5. **Fermeture rapide** si la rafale n'est pas gagnante au bout de 10 secondes, ou si le signal s'inverse au calcul suivant : ce sont les « Clôture -0,10 € ». Durée maximale : 60 secondes.
+6. **Le calcul suivant recommence.**
+
+Sur un compte de 1 000 €, réglez `RafaleLotScale` à 0,2 ou 0,3 : une rafale complète fait 0,85 lot, ce qui est beaucoup pour ce capital. Ce mode se teste dans le testeur MT5 en « ticks réels » puis en démo. Mes données en bougies d'1 minute ne peuvent pas le vérifier.
+
 ## Réglages principaux
 
 | Paramètre | Défaut | Rôle |
 |---|---|---|
-| `Preset` | TENDANCE | TENDANCE, VIDEO, SECONDES ou CUSTOM |
+| `Preset` | TENDANCE | TENDANCE, VIDEO, SECONDES, RAFALE ou CUSTOM |
 | `RiskPerTradePct` | 1 | Risque par trade en % de l'équité (ou `FixedLot`) |
 | `LotProgression` | 1 (désactivé) | Grille : taille × facteur à chaque position ajoutée. Mode VIDEO seulement, en démo. |
 | `DailyStopPct` | 0 (désactivé) | Arrêt pour la journée au-delà de x % de perte |

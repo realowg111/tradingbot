@@ -16,6 +16,11 @@
 //|    momentum burst agreeing with the votes, losers cut after 15 s,|
 //|    break-even then tight trailing on winners, and bigger         |
 //|    positions added while the move continues (0.05 x 1.5 ...).    |
+//|  RAFALE   : the video's journal: every 5 s a "calcul"; on a      |
+//|    validated signal, 6 positions at once (0.30 ... 0.05 lot),    |
+//|    each with its own TP (biggest lot = nearest TP), common stop; |
+//|    remaining positions protected at entry after the first TP;    |
+//|    burst closed on a flip or if not positive after 10 s.         |
 //|  CUSTOM   : every setting below is used as entered.              |
 //|                                                                  |
 //| Backtests (scripts/scalping_lab, scripts/xau_daytrade): the      |
@@ -24,12 +29,12 @@
 //| (about -4 %/yr at 0.5 % risk, Nasdaq 2014-2024). Demo first.     |
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
-#property version   "4.00"
+#property version   "5.00"
 #property strict
 
 #include <Trade/Trade.mqh>
 
-enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2, PRESET_SECONDES = 3 };
+enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2, PRESET_SECONDES = 3, PRESET_RAFALE = 4 };
 
 input group "Mode"
 input ENUM_PRESET Preset       = PRESET_TENDANCE; // Preregage (CUSTOM = utiliser les valeurs ci-dessous)
@@ -83,6 +88,18 @@ input double AddStepATR        = 0.15;   // Un renfort a chaque +x ATR depuis la
 input double AddLotMult        = 1.5;    // Taille de chaque renfort = precedente x ce facteur
 input int    MaxTradeSeconds   = 180;    // Duree max d'une position, en secondes
 
+input group "Mode RAFALE (journal de la video)"
+input int    RafaleCycleSeconds = 5;     // Un calcul toutes les N secondes
+input int    RafaleMinVotes     = 7;     // Votes alignes requis (sur 10) pour valider un signal
+input string RafaleLots         = "0.30,0.20,0.15,0.10,0.05,0.05";  // Lots de la rafale (le 1er a le TP le plus proche)
+input string RafaleTPsATR       = "0.10,0.15,0.20,0.30,0.45,0.60";  // TP de chaque position, en ATR(14) M1
+input double RafaleLotScale     = 1.0;   // Multiplie tous les lots (adapter a la taille du compte)
+input double RafaleSL_ATR       = 0.5;   // Stop commun, en ATR
+input int    RafaleCutSeconds   = 10;    // Ferme la rafale si elle n'est pas gagnante apres N secondes
+input int    RafaleMaxSeconds   = 60;    // Duree max d'une rafale
+input bool   RafaleBreakEven    = true;  // Apres le 1er TP, stop des positions restantes au prix d'entree
+input bool   RafaleCloseOnFlip  = true;  // Ferme la rafale si le signal s'inverse au calcul suivant
+
 input group "Divers"
 input long   Magic             = 12121212;
 input bool   WriteCsvLog       = true;
@@ -99,6 +116,9 @@ double p_tpAtr, p_slAtr, p_spacing, p_tpR, p_lotProg;
 bool   p_tick, p_trend, p_pullback, p_swing, p_closeOpp, p_window;
 string p_name;
 bool   p_sec = false;
+bool   p_raf = false;
+int    g_rafCount = 0;          // positions opened in the current burst
+int    g_rafSide = 0;
 
 // recent ticks (mid price, time in ms) for the momentum of the SECONDES mode
 double   g_tkP[1024];
@@ -156,6 +176,10 @@ void ApplyPreset()
       p_name = "VIDEO"; p_minVotes = 8; p_tick = true; p_trend = false; p_pullback = false;
       p_swing = false; p_tpAtr = 0.2; p_slAtr = 1.5; p_hold = 30; p_closeOpp = true;
       p_maxPos = 5; p_spacing = 0.1; p_window = false;
+   }
+   else if(Preset == PRESET_RAFALE)
+   {
+      p_name = "RAFALE"; p_raf = true; p_trend = false; p_window = false; p_tick = false;
    }
    else if(Preset == PRESET_SECONDES)
    {
@@ -221,6 +245,125 @@ bool SecOpen(int side, double lots, double slDist, string why)
             DoubleToString(price, digits), DoubleToString(sl, digits), g_latencyMs));
    else J("Ordre refuse : code " + IntegerToString(trade.ResultRetcode()));
    return ok;
+}
+
+//+------------------------------------------------------------------+
+//| RAFALE mode: a burst of positions with laddered TPs per signal   |
+//+------------------------------------------------------------------+
+void DayCheck()
+{
+   MqlDateTime d; TimeToStruct(TimeCurrent(), d);
+   if(d.day_of_year != g_day) { g_day = d.day_of_year; g_dayStartEq = AccountInfoDouble(ACCOUNT_EQUITY); g_halted = false; }
+   if(DailyStopPct > 0 && !g_halted && AccountInfoDouble(ACCOUNT_EQUITY) < g_dayStartEq * (1 - DailyStopPct / 100.0))
+   { g_halted = true; CloseSide(0, "arret journalier"); J("Arret pour la journee (perte max atteinte)"); }
+}
+
+int ParseList(string txt, double &out[])
+{
+   string parts[];
+   int n = StringSplit(txt, ',', parts);
+   ArrayResize(out, n);
+   int k = 0;
+   for(int i = 0; i < n; i++)
+   {
+      StringTrimLeft(parts[i]); StringTrimRight(parts[i]);
+      if(StringLen(parts[i]) == 0) continue;
+      out[k++] = StringToDouble(parts[i]);
+   }
+   ArrayResize(out, k);
+   return k;
+}
+
+void RafaleOpen(int side, double atr)
+{
+   double lots[], tps[];
+   int n = MathMin(ParseList(RafaleLots, lots), ParseList(RafaleTPsATR, tps));
+   if(n <= 0) { J("Reglages RafaleLots / RafaleTPsATR invalides"); return; }
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double minDist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point + (ask - bid);
+   g_rafCount = 0; g_rafSide = side;
+   ulong t0 = GetMicrosecondCount();
+   for(int i = 0; i < n; i++)
+   {
+      double price = side > 0 ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double sl = NormalizeDouble(price - side * MathMax(RafaleSL_ATR * atr, minDist), digits);
+      double tp = NormalizeDouble(price + side * MathMax(tps[i] * atr, minDist), digits);
+      double lot = NormLot(lots[i] * RafaleLotScale);
+      bool ok = side > 0 ? trade.Buy(lot, _Symbol, 0, sl, tp, "S12 RAF") : trade.Sell(lot, _Symbol, 0, sl, tp, "S12 RAF");
+      if(ok) { g_rafCount++; J(StringFormat("Position ouverte : %s %.2f lot a %s, TP %s", side > 0 ? "Buy" : "Sell", lot,
+                                            DoubleToString(price, digits), DoubleToString(tp, digits))); }
+      else J("Ordre refuse : code " + IntegerToString(trade.ResultRetcode()));
+   }
+   g_latencyMs = (GetMicrosecondCount() - t0) / 1000.0 / MathMax(1, n);
+}
+
+void RafaleCycle()
+{
+   DayCheck();
+   MqlRates r[];
+   if(!Read(r)) { g_secStatus = "indicateurs pas encore prets (historique M1 ?)"; return; }
+   g_calc++;
+   double atr = CurrentATR();
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   int side = g_score >= RafaleMinVotes ? 1 : (g_score <= -RafaleMinVotes ? -1 : 0);
+   double e; int open = CountPositions(0, e, 0);
+   string base = StringFormat("calcul %I64d | ACHAT %.0f%% VENTE %.0f%% | votes %+d (requis +/-%d) | spread %.2f (max %.2f)",
+                              g_calc, g_pBuy * 100, (1 - g_pBuy) * 100, g_score, RafaleMinVotes, ask - bid, MaxSpreadATR * atr);
+   if(g_halted) { g_secStatus = base + " -> arret journalier"; return; }
+   if(open > 0)
+   {
+      if(RafaleCloseOnFlip && side != 0 && side != g_rafSide) { CloseSide(0, "signal inverse"); open = 0; }
+      else { g_secStatus = base + StringFormat(" -> suivi de %d position(s)", open); return; }
+   }
+   if(side == 0) { g_secStatus = base + " -> attend : pas assez de signaux alignes"; return; }
+   if(atr <= 0) { g_secStatus = base + " -> attend : ATR indisponible"; return; }
+   if(ask - bid > MaxSpreadATR * atr) { g_secStatus = base + " -> attend : spread trop large"; return; }
+   g_secStatus = base + " -> RAFALE";
+   J(StringFormat("Analyse %s : biais %s, %d/10 signaux alignes, confiance %.0f%%", _Symbol, side > 0 ? "acheteur" : "vendeur",
+                  MathAbs(g_score), (side > 0 ? g_pBuy : 1 - g_pBuy) * 100));
+   J(StringFormat("Signal %s valide - %s", side > 0 ? "d'achat" : "de vente", _Symbol));
+   RafaleOpen(side, atr);
+}
+
+void RafaleManage()
+{
+   int n = 0; double pnl = 0; datetime first = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(!PositionSelectByTicket(t)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || PositionGetInteger(POSITION_MAGIC) != Magic) continue;
+      n++; pnl += PositionGetDouble(POSITION_PROFIT);
+      datetime ot = (datetime)PositionGetInteger(POSITION_TIME);
+      if(first == 0 || ot < first) first = ot;
+   }
+   if(n == 0) return;
+   long age = (long)(TimeCurrent() - first);
+   if((age >= RafaleCutSeconds && pnl <= 0) || age >= RafaleMaxSeconds)
+   {
+      CloseSide(0, age >= RafaleMaxSeconds ? "duree max" : "rafale non gagnante");
+      return;
+   }
+   // after the first TP: protect the rest at their entry price
+   if(RafaleBreakEven && g_rafCount > 0 && n < g_rafCount)
+   {
+      int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong t = PositionGetTicket(i);
+         if(!PositionSelectByTicket(t)) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol || PositionGetInteger(POSITION_MAGIC) != Magic) continue;
+         int s = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 1 : -1;
+         double open = PositionGetDouble(POSITION_PRICE_OPEN), sl = PositionGetDouble(POSITION_SL);
+         double cur = PositionGetDouble(POSITION_PRICE_CURRENT);
+         double be = NormalizeDouble(open + s * spread, digits);
+         bool better = (sl == 0) || (s > 0 ? be > sl + _Point : be < sl - _Point);
+         if(better && s * (cur - be) > SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point)
+            trade.PositionModify(t, be, PositionGetDouble(POSITION_TP));
+      }
+   }
 }
 
 void SecCycle()
@@ -668,7 +811,7 @@ void Panel()
          sw >= sl ? clrLime : clrOrangeRed); y += 16;
    string reg = !p_trend ? "filtre off" : (g_regime > 0 ? "HAUSSIERE (achats seulement)" : (g_regime < 0 ? "BAISSIERE (ventes seulement)" : "neutre (pas de trade)"));
    Label("S12_r", x, y, "Tendance du jour : " + reg, g_regime > 0 ? clrLime : (g_regime < 0 ? clrOrangeRed : clrSilver)); y += 22;
-   if(p_sec) { Label("S12_s", x, y, "Mode SECONDES : " + g_secStatus, clrYellow, 8); y += 18; }
+   if(p_sec || p_raf) { Label("S12_s", x, y, "Mode " + p_name + " : " + g_secStatus, clrYellow, 8); y += 18; }
    Label("S12_g", x, y, StringFormat("ACHAT %.1f%%   |   VENTE %.1f%%   (score %+d)", g_pBuy * 100, (1 - g_pBuy) * 100, g_score),
          g_pBuy >= 0.5 ? clrLime : clrOrangeRed, 11); y += 22;
    for(int i = 0; i < 12; i++)
@@ -841,6 +984,7 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    RecordTick();
+   if(p_raf) { RafaleManage(); return; }
    if(p_sec) { SecManage(); return; }
    datetime bar = iTime(_Symbol, PERIOD_M1, 0);
    if(p_tick || bar != g_lastBar)
@@ -856,6 +1000,11 @@ void OnTimer()
    {
       g_lastSecCycle = GetTickCount64();
       SecCycle();
+   }
+   if(p_raf && GetTickCount64() - g_lastSecCycle >= (ulong)RafaleCycleSeconds * 1000)
+   {
+      g_lastSecCycle = GetTickCount64();
+      RafaleCycle();
    }
    static ulong lastPanel = 0;
    if(GetTickCount64() - lastPanel < 1000) return;
