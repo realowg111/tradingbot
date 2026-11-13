@@ -12,31 +12,26 @@
 //|  5. des que le gain atteint +x % : fermeture progressive, la plus |
 //|     grosse position gagnante d'abord, une toutes les 0.7 s       |
 //|  6. retour a la pause, en boucle                                 |
-//| Protections (le style reste le meme) :                           |
-//|  - contre-courant seulement dans le sens de la tendance de fond  |
-//|  - reduction de la rafale si elle perd : plus grosse position    |
-//|    fermee a -2 %, puis -3.5 %, tout a -5 %                        |
-//|  - fermeture apres 15 min sans gain                              |
-//|  - rafales plus petites (20 % de la marge au lieu de 70 %)       |
-//| Pour la version exacte du live : MarginUse 0.70, TrendFilter     |
-//| false, ReduceStep1Pct/ReduceStep2Pct/CloseAllPct 0,              |
-//| MaxBurstMinutes 0.                                               |
+//| Ajout a la strategie du live : reduction de la rafale si elle    |
+//| perd, la plus grosse position d'abord : -2 %, -3.5 %, puis tout  |
+//| a -5 % du solde. Le reste est identique au live.                 |
+//| Options desactivees par defaut : TrendFilter, MaxBurstMinutes.   |
 //+------------------------------------------------------------------+
-#property version "1.10"
+#property version "1.20"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
 input int    LookbackSeconds = 20;   // Mouvement regarde pour choisir le sens (contre-courant)
-input double MarginUse      = 0.20;  // Part du solde utilisee en marge par la rafale (live : 0.70 ; protege : 0.20)
+input double MarginUse      = 0.70;  // Part du solde utilisee en marge par la rafale (0.70 comme le live)
 input double StartClosePct  = 3.0;   // Debut des fermetures quand la rafale gagne x % du solde
 input int    CloseEveryMs   = 700;   // Une fermeture toutes les N millisecondes
 input double EmergencyPct   = 0.0;   // Arret d'urgence a -x % du solde (0 = aucun, comme le live)
 
-input bool   TrendFilter    = true;  // Protection 1 : contre-courant seulement dans le sens de la tendance de fond (EMA 50 H1)
+input bool   TrendFilter    = false; // Option : contre-courant seulement dans le sens de la tendance de fond (EMA 50 H1)
 input double ReduceStep1Pct = 2.0;   // Protection 2 : a -x % ferme la plus grosse position (0 = off)
 input double ReduceStep2Pct = 3.5;   // ... a -x % ferme la plus grosse restante
 input double CloseAllPct    = 5.0;   // ... a -x % ferme tout ce qui reste
-input int    MaxBurstMinutes = 15;   // Protection 3 : ferme la rafale si elle n'est pas en gain apres N minutes (0 = off)
+input int    MaxBurstMinutes = 0;    // Option : ferme la rafale si elle n'est pas en gain apres N minutes (0 = off)
 input long   MagicNumber    = 7777;
 
 CTrade trade;
@@ -346,7 +341,7 @@ void OnTimer()
    if(phase == 1) ph = "RAFALE OUVERTE : on attend +" + DoubleToString(StartClosePct, 1) + " %";
    if(phase == 2) ph = "FERMETURE PROGRESSIVE (plus grosse position gagnante d'abord)";
    double ml = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
-   Comment("LIVE TIKTOK  -  ", _Symbol, "   (version protegee)",
+   Comment("LIVE TIKTOK  -  ", _Symbol, "   (strategie du live + reduction des pertes)",
            "\nPhase : ", ph,
            "\nPositions : ", n, "   resultat en cours : ", DoubleToString(profit, 2),
            "   (", (startBalance > 0 ? DoubleToString(100.0 * profit / startBalance, 2) : "0"), " %)",
