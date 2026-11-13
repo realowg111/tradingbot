@@ -47,7 +47,7 @@ def load_eurusd(raw):
     parts = []
     for f in sorted(glob.glob(os.path.join(raw, "*.parquet"))):
         x = pd.read_parquet(f)
-        x.index = pd.to_datetime(x.pop("time"), unit="s", utc=True).tz_convert("America/New_York").tz_localize(None)
+        x.index = pd.DatetimeIndex(pd.to_datetime(x.pop("time"), unit="s", utc=True)).tz_convert("America/New_York").tz_localize(None)
         parts.append(x[["open", "high", "low", "close"]])
     d = pd.concat(parts).sort_index()
     return d[~d.index.duplicated()]
