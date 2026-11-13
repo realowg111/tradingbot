@@ -120,3 +120,24 @@ Reconstruction indépendante des règles principales, lues dans le code source :
 Sur 2022–2025, la reconstruction retrouve le profil de l'auteur : des pertes en 2022–2023, puis des gains concentrés en 2024–2025. Sur 2009–2021, elle perd 11 années sur 13. Sur 17 ans, le gain moyen par trade est nul (PF 1,00) et 17 % des trades sont gagnants.
 
 Conclusion : les gains publiés viennent de la hausse exceptionnelle de l'or en 2025–2026 (+59 % en 2025), pas d'un avantage durable. Le robot a été mis au point sur la période même où il est testé. Sur les 13 années qu'il n'a jamais vues, il perd.
+
+## Comparaison EUR/USD contre or (mêmes scripts, mêmes frais en %)
+
+Données EUR/USD : OANDA en bougies 1 minute, janvier 2009 → octobre 2026 (`prepare_eurusd.py`, jeu Hugging Face `bunqi/OANDA_EURUSD_EURUSD`). Les frais ECN en pourcentage du prix sont les mêmes sur les deux marchés : environ 0,8 pip sur l'EUR/USD et 0,25 $ sur l'or, soit 0,007 %.
+
+Sharpe annualisé :
+
+| Stratégie | Or, sans frais | Or, ECN | EUR/USD, sans frais | EUR/USD, ECN |
+|---|---|---|---|---|
+| A. ORB 08h20 | 0,77 | **+0,41** | 0,12 | -0,83 |
+| B. Range asiatique | 0,58 | **+0,31** | 0,47 | -0,07 |
+| C. Noise boundary | 0,30 | -0,04 | -0,09 | -0,81 |
+| D. Momentum 13h | 0,82 | +0,02 | 0,67 | -1,09 |
+| Scalper 12 indicateurs (TikTok) | -4,4 / -2,6 (selon la période) | ≈ -9,5 | -3,0 | -13,5 |
+
+Sur l'EUR/USD, aucune des 4 stratégies n'est positive avec des frais ECN. Sur les grilles, un seul réglage sur 80 est positif, sur 2009–2017 seulement. Le scalper perd dans ses 108 réglages, comme sur l'or.
+
+Pourquoi l'EUR/USD fait pire :
+- Il bouge environ deux fois moins que l'or en pourcentage, pour le même coût. Les frais pèsent donc deux fois plus lourd sur chaque trade.
+- Il n'a pas de tendance de fond sur la période (-1,2 %/an), alors que l'or a monté de 6 à 10 %/an. Les stratégies de cassure profitent moins des longs.
+- C'est le marché le plus liquide et le plus disputé : il reste moins d'écarts de prix exploitables.
