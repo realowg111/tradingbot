@@ -194,3 +194,32 @@ Le spread se paie à chaque rafale. Avec `LotScale` = 0,2 sur 1 000 €, une raf
 Installation : copier le fichier dans `MQL5/Experts`, compiler (F7), le glisser sur **XAUUSD M1**, garder `LotScale` = 0,2 pour 1 000 €, activer **Trading Algo**. Retirez les autres robots de ce graphique.
 
 La ligne jaune du panneau dit à chaque calcul ce que fait le robot : votes, « attend : … », « RAFALE », ou l'état de la rafale ouverte. Si le trading automatique n'est pas autorisé, elle affiche « BLOQUE ». Si un ordre est refusé, le journal affiche le code et sa description.
+
+---
+
+# LiveTikTok.mq5 : reproduction du live « HFT ROBOT » (démo uniquement)
+
+Lecture image par image du live (95 images, 2 par seconde, 4 rafales en 42 s, solde de 489,75 € à 766,99 €) :
+
+| | Rafale 1 | Rafale 2 | Rafale 3 | Rafale 4 |
+|---|---|---|---|---|
+| Ouverture | 4,5 s | 17 s | 28,5 s | 41 s |
+| Pause avant (sans position) | — | 5 s | 5,5 s | 5,5 s |
+| Sens | achat | vente | achat (après une baisse de 4 $) | vente (après une hausse de 2 $) |
+| Positions | 6 | 6 | 7 | 7 |
+| Lots au total / solde | 0,42 / 490 | 0,46 / 527 | 0,64 / 563 | 0,90 / 619 |
+| Pire moment | -22,68 | -21,30 | -37,50 (marge 105 %) | -9,55 (marge 95 %) |
+| Ordre de fermeture | gros lots d'abord | 0,10 → 0,10 → 0,08 → 0,08 → 0,05 → 0,05 | 0,15 → 0,15 → 0,08… | 0,30 → 0,15 → 0,20 → 0,10 → 0,05… |
+| Résultat | +37 | +36 | +56 | +148 |
+
+Règles codées :
+1. Pause de 5 s sans position.
+2. Sens à contre-courant du mouvement des 20 dernières secondes : achat après une baisse, vente après une hausse.
+3. Rafale de 7 positions (proportions 0,30 / 0,20 / 0,15 / 0,10 / 0,05 / 0,05 / 0,05), dont le total est calculé pour utiliser 70 % du solde en marge.
+4. Aucun stop, aucun TP.
+5. À +3 % du solde, fermeture progressive : la plus grosse position gagnante d'abord, une toutes les 0,7 s, uniquement les positions en gain.
+6. Retour à la pause.
+
+`EmergencyPct` (0 par défaut, comme le live) permet un arrêt d'urgence.
+
+Simulation des mêmes règles sur l'or 2024–2025 (`scripts/xau_daytrade/tiktok_live_sim.py`, 99 essais de 30 jours, levier 1:500) : 89 % des rafales gagnantes, mais 100 % des comptes perdus, en 0,42 jour en médiane (0,26 jour en utilisant 88 % de la marge, comme dans la 4e rafale).
