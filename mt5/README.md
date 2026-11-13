@@ -141,11 +141,30 @@ Dans la vidéo, les rafales s'ouvrent à 09:06:11, 09:06:21, 09:06:31 et 09:06:4
 
 Les lots, les TP et le stop restent ceux du groupe « Mode RAFALE ». Ce rythme multiplie le nombre de trades, donc les frais : à comparer avec RAFALE sur un 2e graphique avec un autre `Magic`.
 
+### Mode LIVE_PROTEGE : le live TikTok, avec une limite de perte
+
+Dans le live, le robot ouvre 6 à 7 positions sans stop, laisse la rafale descendre (-23 €, -37 €, avec une marge jusqu'à 105 %), puis ferme tout dès que le total redevient positif. Les pertes ne sont jamais encaissées, jusqu'au jour où le prix ne revient pas.
+
+`Preset = LIVE_PROTEGE` garde la mécanique, mais avec des limites, en % du solde au moment de la rafale :
+
+| Règle | Valeur |
+|---|---|
+| Rafale | 6 positions (lots de `RafaleLots` × `RafaleLotScale`), **sans SL ni TP individuels** |
+| Signal | 7 votes sur 10, calcul toutes les 5 s |
+| Objectif du panier | toute la rafale est fermée à **+1 %** |
+| Limite de perte du panier | toute la rafale est fermée à **-0,7 %** : la perte est encaissée, petite et connue |
+| Protection du gain | dès que la rafale a atteint +0,5 %, fermeture si elle retombe sous la moitié de son meilleur gain |
+| Durée max | 30 minutes |
+
+Comme le gain visé (+1 %) est plus grand que la perte maximale (-0,7 %), le compte monte dès que plus de 41 % des rafales atteignent leur objectif. Les mêmes règles de panier existent pour tous les modes RAFALE, dans le groupe « Panier » (0 = désactivé).
+
+Sur 1 000 €, gardez `RafaleLotScale` à 0,2 : une perte de 0,7 % (7 €) correspond alors à un mouvement de l'or de quelques dollars contre la rafale.
+
 ## Réglages principaux
 
 | Paramètre | Défaut | Rôle |
 |---|---|---|
-| `Preset` | TENDANCE | TENDANCE, VIDEO, SECONDES, RAFALE, RAFALE_RAPIDE ou CUSTOM |
+| `Preset` | TENDANCE | TENDANCE, VIDEO, SECONDES, RAFALE, RAFALE_RAPIDE, LIVE_PROTEGE ou CUSTOM |
 | `RiskPerTradePct` | 1 | Risque par trade en % de l'équité (ou `FixedLot`) |
 | `LotProgression` | 1 (désactivé) | Grille : taille × facteur à chaque position ajoutée. Mode VIDEO seulement, en démo. |
 | `DailyStopPct` | 0 (désactivé) | Arrêt pour la journée au-delà de x % de perte |

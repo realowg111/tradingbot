@@ -24,6 +24,10 @@
 //|  RAFALE_RAPIDE : RAFALE with the video's rhythm: a calcul every   |
 //|    5 s, 2 votes are enough (majority side), burst cut after 5 s, |
 //|    10 s max, wider spread tolerance.                             |
+//|  LIVE_PROTEGE : the TikTok live: burst without individual stops, |
+//|    held through small drawdowns, closed together at +1 % of the  |
+//|    balance; but closed at -0.7 % (loss limit), and half of the   |
+//|    best gain is locked once the burst reached +0.5 %.            |
 //|  CUSTOM   : every setting below is used as entered.              |
 //|                                                                  |
 //| Backtests (scripts/scalping_lab, scripts/xau_daytrade): the      |
@@ -32,12 +36,12 @@
 //| (about -4 %/yr at 0.5 % risk, Nasdaq 2014-2024). Demo first.     |
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
-#property version   "5.10"
+#property version   "6.00"
 #property strict
 
 #include <Trade/Trade.mqh>
 
-enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2, PRESET_SECONDES = 3, PRESET_RAFALE = 4, PRESET_RAFALE_RAPIDE = 5 };
+enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2, PRESET_SECONDES = 3, PRESET_RAFALE = 4, PRESET_RAFALE_RAPIDE = 5, PRESET_LIVE_PROTEGE = 6 };
 
 input group "Mode"
 input ENUM_PRESET Preset       = PRESET_TENDANCE; // Preregage (CUSTOM = utiliser les valeurs ci-dessous)
@@ -103,6 +107,13 @@ input int    RafaleMaxSeconds   = 60;    // Duree max d'une rafale
 input bool   RafaleBreakEven    = true;  // Apres le 1er TP, stop des positions restantes au prix d'entree
 input bool   RafaleCloseOnFlip  = true;  // Ferme la rafale si le signal s'inverse au calcul suivant
 
+input group "Panier : la rafale geree comme un tout"
+input double BasketTakePct      = 0.0;   // Ferme toute la rafale a +x % du solde (0 = off)
+input double BasketStopPct      = 0.0;   // Ferme toute la rafale a -x % du solde (0 = off)
+input double BasketTrailStartPct = 0.0;  // Protection : des +x % du solde... (0 = off)
+input double BasketTrailKeepPct = 50.0;  // ...garder au moins ce % du meilleur gain de la rafale
+input bool   BasketNoIndividualSL = false; // Pas de SL/TP par position (comme le live), le panier gere tout
+
 input group "Divers"
 input long   Magic             = 12121212;
 input bool   WriteCsvLog       = true;
@@ -125,6 +136,10 @@ int    g_rafSide = 0;
 // effective RAFALE settings (RAFALE_RAPIDE overrides them with the video's rhythm)
 int    r_cycle, r_minVotes, r_cut, r_max;
 double r_spread;
+// effective basket settings
+double b_take, b_stop, b_tStart, b_keep;
+bool   b_noSL;
+double g_basketBest = 0, g_basketRef = 0;
 
 // recent ticks (mid price, time in ms) for the momentum of the SECONDES mode
 double   g_tkP[1024];
@@ -184,6 +199,14 @@ void ApplyPreset()
       p_maxPos = 5; p_spacing = 0.1; p_window = false;
    }
    r_cycle = RafaleCycleSeconds; r_minVotes = RafaleMinVotes; r_cut = RafaleCutSeconds; r_max = RafaleMaxSeconds; r_spread = MaxSpreadATR;
+   b_take = BasketTakePct; b_stop = BasketStopPct; b_tStart = BasketTrailStartPct; b_keep = BasketTrailKeepPct; b_noSL = BasketNoIndividualSL;
+   if(Preset == PRESET_LIVE_PROTEGE)
+   {
+      // the live video (burst without stops, closed together in profit) with a loss limit
+      p_name = "LIVE PROTEGE"; p_raf = true; p_trend = false; p_window = false; p_tick = false;
+      r_cycle = 5; r_minVotes = 7; r_cut = 100000; r_max = 1800; r_spread = 0.5;
+      b_noSL = true; b_take = 1.0; b_stop = 0.7; b_tStart = 0.5; b_keep = 50.0;
+   }
    if(Preset == PRESET_RAFALE || Preset == PRESET_RAFALE_RAPIDE)
    {
       p_name = "RAFALE"; p_raf = true; p_trend = false; p_window = false; p_tick = false;
@@ -295,12 +318,13 @@ void RafaleOpen(int side, double atr)
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double minDist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point + (ask - bid);
    g_rafCount = 0; g_rafSide = side;
+   g_basketBest = 0; g_basketRef = AccountInfoDouble(ACCOUNT_BALANCE);
    ulong t0 = GetMicrosecondCount();
    for(int i = 0; i < n; i++)
    {
       double price = side > 0 ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double sl = NormalizeDouble(price - side * MathMax(RafaleSL_ATR * atr, minDist), digits);
-      double tp = NormalizeDouble(price + side * MathMax(tps[i] * atr, minDist), digits);
+      double sl = b_noSL ? 0 : NormalizeDouble(price - side * MathMax(RafaleSL_ATR * atr, minDist), digits);
+      double tp = b_noSL ? 0 : NormalizeDouble(price + side * MathMax(tps[i] * atr, minDist), digits);
       double lot = NormLot(lots[i] * RafaleLotScale);
       bool ok = side > 0 ? trade.Buy(lot, _Symbol, 0, sl, tp, "S12 RAF") : trade.Sell(lot, _Symbol, 0, sl, tp, "S12 RAF");
       if(ok) { g_rafCount++; J(StringFormat("Position ouverte : %s %.2f lot a %s, TP %s", side > 0 ? "Buy" : "Sell", lot,
@@ -326,7 +350,20 @@ void RafaleCycle()
    if(open > 0)
    {
       if(RafaleCloseOnFlip && side != 0 && side != g_rafSide) { CloseSide(0, "signal inverse"); open = 0; }
-      else { g_secStatus = base + StringFormat(" -> suivi de %d position(s)", open); return; }
+      else
+      {
+         double pnlNow = 0;
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+         {
+            ulong t = PositionGetTicket(i);
+            if(PositionSelectByTicket(t) && PositionGetInteger(POSITION_MAGIC) == Magic && PositionGetString(POSITION_SYMBOL) == _Symbol)
+               pnlNow += PositionGetDouble(POSITION_PROFIT);
+         }
+         double ref = g_basketRef > 0 ? g_basketRef : AccountInfoDouble(ACCOUNT_BALANCE);
+         g_secStatus = base + StringFormat(" -> panier de %d position(s) : %+.2f (%+.2f%%), objectif %+.2f%%, limite -%.2f%%",
+                                           open, pnlNow, 100.0 * pnlNow / ref, b_take, b_stop);
+         return;
+      }
    }
    if(side == 0) { g_secStatus = base + " -> attend : pas assez de signaux alignes"; return; }
    if(atr <= 0) { g_secStatus = base + " -> attend : ATR indisponible"; return; }
@@ -352,6 +389,14 @@ void RafaleManage()
    }
    if(n == 0) return;
    long age = (long)(TimeCurrent() - first);
+   // basket rules, in % of the balance when the burst was opened
+   double ref = g_basketRef > 0 ? g_basketRef : AccountInfoDouble(ACCOUNT_BALANCE);
+   double pct = 100.0 * pnl / ref;
+   if(pct > g_basketBest) g_basketBest = pct;
+   if(b_take > 0 && pct >= b_take) { CloseSide(0, StringFormat("objectif du panier atteint %+.2f%%", pct)); return; }
+   if(b_stop > 0 && pct <= -b_stop) { CloseSide(0, StringFormat("limite de perte du panier %+.2f%%", pct)); return; }
+   if(b_tStart > 0 && g_basketBest >= b_tStart && pct <= g_basketBest * b_keep / 100.0)
+   { CloseSide(0, StringFormat("gain protege %+.2f%% (max %+.2f%%)", pct, g_basketBest)); return; }
    if((age >= r_cut && pnl <= 0) || age >= r_max)
    {
       CloseSide(0, age >= r_max ? "duree max" : "rafale non gagnante");
