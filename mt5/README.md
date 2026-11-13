@@ -104,11 +104,21 @@ Le testeur MT5 en ticks réels chez votre courtier donnera le verdict final.
 
 `PERSONNALISE` (Preset = CUSTOM) : tous les paramètres ci-dessous sont utilisés tels quels.
 
+## Mode SECONDES (`Preset = SECONDES`) : la boucle de la vidéo
+
+1. **Cycle toutes les 2 secondes.** Si aucune position n'est ouverte et qu'au moins 6 votes sur 10 sont d'accord **et** que le prix a bougé d'au moins 0,15 ATR dans ce sens au cours des 10 dernières secondes, le robot ouvre **0,05 lot**, avec un stop de départ à 0,5 ATR et sans TP.
+2. **Coupe rapide :** si la position n'est pas gagnante au bout de **15 secondes**, elle est fermée. C'est la perte minime de la vidéo.
+3. **Protection :** dès +0,10 ATR de gain, le stop passe au prix d'entrée. Dès +0,20 ATR, un stop suiveur à 0,20 ATR accompagne le prix.
+4. **Renforts :** à chaque +0,15 ATR depuis la dernière entrée, une nouvelle position plus grosse est ajoutée, jusqu'à 4 renforts : 0,05 → 0,07 → 0,11 → 0,16 → 0,25 lot. Ce sont eux qui font les gros gains quand le mouvement continue.
+5. **Durée max :** 3 minutes par position. Ensuite on recommence.
+
+Tous ces nombres sont réglables dans le groupe « Mode SECONDES ». Ce mode ne peut pas être vérifié sur mes données en bougies d'1 minute : il se teste dans le testeur MT5 en **« Chaque tick basé sur des ticks réels »**, puis sur le compte démo.
+
 ## Réglages principaux
 
 | Paramètre | Défaut | Rôle |
 |---|---|---|
-| `Preset` | TENDANCE | TENDANCE, VIDEO ou CUSTOM |
+| `Preset` | TENDANCE | TENDANCE, VIDEO, SECONDES ou CUSTOM |
 | `RiskPerTradePct` | 1 | Risque par trade en % de l'équité (ou `FixedLot`) |
 | `LotProgression` | 1 (désactivé) | Grille : taille × facteur à chaque position ajoutée. Mode VIDEO seulement, en démo. |
 | `DailyStopPct` | 0 (désactivé) | Arrêt pour la journée au-delà de x % de perte |

@@ -12,6 +12,10 @@
 //|  VIDEO    : the behaviour seen in the TikTok video: analysis on  |
 //|    every tick, tiny TP, up to 5 close positions, optional        |
 //|    growing lot sizes (grid). Demo only.                          |
+//|  SECONDES : the video's loop: a cycle every 2 s, entry on a      |
+//|    momentum burst agreeing with the votes, losers cut after 15 s,|
+//|    break-even then tight trailing on winners, and bigger         |
+//|    positions added while the move continues (0.05 x 1.5 ...).    |
 //|  CUSTOM   : every setting below is used as entered.              |
 //|                                                                  |
 //| Backtests (scripts/scalping_lab, scripts/xau_daytrade): the      |
@@ -20,12 +24,12 @@
 //| (about -4 %/yr at 0.5 % risk, Nasdaq 2014-2024). Demo first.     |
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
-#property version   "3.00"
+#property version   "4.00"
 #property strict
 
 #include <Trade/Trade.mqh>
 
-enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2 };
+enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2, PRESET_SECONDES = 3 };
 
 input group "Mode"
 input ENUM_PRESET Preset       = PRESET_TENDANCE; // Preregage (CUSTOM = utiliser les valeurs ci-dessous)
@@ -63,6 +67,22 @@ input int    WindowEndNY       = 720;    // Fin (720 = 12:00)
 input bool   AutoDetectOffset  = true;   // Detecter le decalage serveur / New York (reel/demo)
 input int    ServerMinusNY     = 7;      // Decalage serveur - New York en heures (testeur)
 
+input group "Mode SECONDES (comme la video)"
+input int    CycleSeconds      = 2;      // Un cycle d'analyse toutes les N secondes
+input int    SecMinVotes       = 6;      // Votes alignes requis (sur 10)
+input double MomentumATR       = 0.15;   // Elan requis : mouvement du prix sur la fenetre, en ATR
+input int    MomentumSeconds   = 10;     // Fenetre de l'elan, en secondes
+input double SecBaseLot        = 0.05;   // Lot de la 1re position
+input double SecInitialSL_ATR  = 0.5;    // Stop de depart, en ATR
+input int    CutLoserSeconds   = 15;     // Coupe la position si elle n'est pas gagnante apres N secondes
+input double BreakEvenATR      = 0.10;   // Stop ramene au prix d'entree des +x ATR de gain
+input double TrailStartATR     = 0.20;   // Stop suiveur a partir de +x ATR de gain
+input double TrailATR          = 0.20;   // Distance du stop suiveur, en ATR
+input int    MaxAdds           = 4;      // Renforts max dans le sens du mouvement
+input double AddStepATR        = 0.15;   // Un renfort a chaque +x ATR depuis la derniere entree
+input double AddLotMult        = 1.5;    // Taille de chaque renfort = precedente x ce facteur
+input int    MaxTradeSeconds   = 180;    // Duree max d'une position, en secondes
+
 input group "Divers"
 input long   Magic             = 12121212;
 input bool   WriteCsvLog       = true;
@@ -78,6 +98,13 @@ int    p_minVotes, p_maxPos, p_hold, p_wStart, p_wEnd;
 double p_tpAtr, p_slAtr, p_spacing, p_tpR, p_lotProg;
 bool   p_tick, p_trend, p_pullback, p_swing, p_closeOpp, p_window;
 string p_name;
+bool   p_sec = false;
+
+// recent ticks (mid price, time in ms) for the momentum of the SECONDES mode
+double   g_tkP[1024];
+long     g_tkT[1024];
+int      g_tkHead = 0, g_tkN = 0;
+ulong    g_lastSecCycle = 0;
 
 int hRSI, hMACD, hEMA20, hEMA9, hEMAH1, hBB, hATR, hATR100;
 datetime g_lastBar = 0;
@@ -128,6 +155,139 @@ void ApplyPreset()
       p_name = "VIDEO"; p_minVotes = 8; p_tick = true; p_trend = false; p_pullback = false;
       p_swing = false; p_tpAtr = 0.2; p_slAtr = 1.5; p_hold = 30; p_closeOpp = true;
       p_maxPos = 5; p_spacing = 0.1; p_window = false;
+   }
+   else if(Preset == PRESET_SECONDES)
+   {
+      p_name = "SECONDES"; p_sec = true; p_trend = false; p_window = false; p_tick = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| SECONDES mode: momentum entry, quick cut, break-even, trailing,  |
+//| adding growing positions while the move goes our way            |
+//+------------------------------------------------------------------+
+void RecordTick()
+{
+   MqlTick t;
+   if(!SymbolInfoTick(_Symbol, t) || t.bid <= 0) return;
+   g_tkP[g_tkHead] = (t.bid + t.ask) / 2.0;
+   g_tkT[g_tkHead] = (long)t.time_msc;
+   g_tkHead = (g_tkHead + 1) % 1024;
+   if(g_tkN < 1024) g_tkN++;
+}
+
+double TickMove(int seconds)
+{
+   if(g_tkN < 2) return 0;
+   int last = (g_tkHead + 1023) % 1024;
+   long limit = g_tkT[last] - (long)seconds * 1000;
+   double ref = g_tkP[last];
+   for(int k = 1; k < g_tkN; k++)
+   {
+      int i = (last - k + 1024) % 1024;
+      if(g_tkT[i] < limit) break;
+      ref = g_tkP[i];
+   }
+   return g_tkP[last] - ref;
+}
+
+double CurrentATR()
+{
+   if(g_atr > 0) return g_atr;
+   double a = Buf(hATR, 0, 1);
+   return a == EMPTY_VALUE ? 0 : a;
+}
+
+double NormLot(double lots)
+{
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN), vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   lots = MathFloor(lots / step + 1e-9) * step;
+   return MathMin(MathMax(lots, vmin), vmax);
+}
+
+bool SecOpen(int side, double lots, double slDist, string why)
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double price = side > 0 ? ask : bid;
+   double minDist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point + (ask - bid);
+   double sl = NormalizeDouble(price - side * MathMax(slDist, minDist), digits);
+   ulong t0 = GetMicrosecondCount();
+   bool ok = side > 0 ? trade.Buy(lots, _Symbol, 0, sl, 0, "S12 SEC") : trade.Sell(lots, _Symbol, 0, sl, 0, "S12 SEC");
+   g_latencyMs = (GetMicrosecondCount() - t0) / 1000.0;
+   if(ok) J(StringFormat("Position ouverte (%s) : %s %.2f lot a %s, SL %s (%.0f ms)", why, side > 0 ? "Buy" : "Sell", lots,
+            DoubleToString(price, digits), DoubleToString(sl, digits), g_latencyMs));
+   else J("Ordre refuse : code " + IntegerToString(trade.ResultRetcode()));
+   return ok;
+}
+
+void SecCycle()
+{
+   MqlDateTime d; TimeToStruct(TimeCurrent(), d);
+   if(d.day_of_year != g_day) { g_day = d.day_of_year; g_dayStartEq = AccountInfoDouble(ACCOUNT_EQUITY); g_halted = false; }
+   if(DailyStopPct > 0 && !g_halted && AccountInfoDouble(ACCOUNT_EQUITY) < g_dayStartEq * (1 - DailyStopPct / 100.0))
+   { g_halted = true; CloseSide(0, "arret journalier"); J("Arret pour la journee (perte max atteinte)"); }
+   MqlRates r[];
+   if(!Read(r)) return;
+   g_calc++;
+   if(g_halted) return;
+   double e; if(CountPositions(0, e, 0) > 0) return;               // adds are handled by SecManage
+   int side = g_score >= SecMinVotes ? 1 : (g_score <= -SecMinVotes ? -1 : 0);
+   if(side == 0) return;
+   double atr = CurrentATR();
+   if(atr <= 0) return;
+   double move = TickMove(MomentumSeconds);
+   if(side * move < MomentumATR * atr) return;                      // no momentum in the votes' direction
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(ask - bid > MaxSpreadATR * atr) return;
+   J(StringFormat("Signal %s valide : %d/10 votes, elan %+.2f en %ds, confiance %.0f%%", side > 0 ? "d'achat" : "de vente",
+                  MathAbs(g_score), move, MomentumSeconds, (side > 0 ? g_pBuy : 1 - g_pBuy) * 100));
+   SecOpen(side, NormLot(SecBaseLot), SecInitialSL_ATR * atr, "elan");
+}
+
+void SecManage()
+{
+   double atr = CurrentATR();
+   if(atr <= 0) return;
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID), spread = ask - bid;
+   int n = 0, side = 0; double lastOpen = 0; datetime lastTime = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(!PositionSelectByTicket(t)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || PositionGetInteger(POSITION_MAGIC) != Magic) continue;
+      int s = PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN), sl = PositionGetDouble(POSITION_SL);
+      double cur = s > 0 ? bid : ask;
+      double gain = s * (cur - open);
+      long age = (long)(TimeCurrent() - (datetime)PositionGetInteger(POSITION_TIME));
+      double pnl = PositionGetDouble(POSITION_PROFIT);
+      if((gain <= 0 && age >= CutLoserSeconds) || age >= MaxTradeSeconds)
+      {
+         if(trade.PositionClose(t)) J(StringFormat("%s : %+.2f (%ds)", gain <= 0 ? "Coupe rapide" : "Cloture (duree max)", pnl, (int)age));
+         continue;
+      }
+      double newSl = sl;
+      if(gain >= BreakEvenATR * atr) newSl = (newSl == 0) ? open + s * spread : (s > 0 ? MathMax(newSl, open + spread) : MathMin(newSl, open - spread));
+      if(gain >= TrailStartATR * atr)
+      {
+         double tr = cur - s * TrailATR * atr;
+         newSl = (newSl == 0) ? tr : (s > 0 ? MathMax(newSl, tr) : MathMin(newSl, tr));
+      }
+      newSl = NormalizeDouble(newSl, digits);
+      if(newSl != sl && MathAbs(newSl - sl) >= 5 * _Point && s * (cur - newSl) > SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point)
+         trade.PositionModify(t, newSl, PositionGetDouble(POSITION_TP));
+      n++; side = s;
+      if((datetime)PositionGetInteger(POSITION_TIME) >= lastTime) { lastTime = (datetime)PositionGetInteger(POSITION_TIME); lastOpen = open; }
+   }
+   // add a bigger position each time the move extends in our favour
+   if(n >= 1 && n <= MaxAdds && !g_halted)
+   {
+      double cur = side > 0 ? ask : bid;
+      if(side * (cur - lastOpen) >= AddStepATR * atr && spread <= MaxSpreadATR * atr)
+         SecOpen(side, NormLot(SecBaseLot * MathPow(AddLotMult, n)), TrailATR * atr, StringFormat("renfort %d", n));
    }
 }
 
@@ -662,7 +822,7 @@ int OnInit()
    if(hRSI == INVALID_HANDLE || hMACD == INVALID_HANDLE || hEMA20 == INVALID_HANDLE || hEMA9 == INVALID_HANDLE ||
       hEMAH1 == INVALID_HANDLE || hBB == INVALID_HANDLE || hATR == INVALID_HANDLE || hATR100 == INVALID_HANDLE) return INIT_FAILED;
    J("Demarrage sur " + _Symbol + ", mode " + p_name + StringFormat(", decalage serveur - New York %+d h", OffsetHours()));
-   EventSetTimer(1);
+   EventSetMillisecondTimer(500);
    return INIT_SUCCEEDED;
 }
 
@@ -674,6 +834,8 @@ void OnDeinit(const int reason)
 
 void OnTick()
 {
+   RecordTick();
+   if(p_sec) { SecManage(); return; }
    datetime bar = iTime(_Symbol, PERIOD_M1, 0);
    if(p_tick || bar != g_lastBar)
    {
@@ -684,6 +846,14 @@ void OnTick()
 
 void OnTimer()
 {
+   if(p_sec && GetTickCount64() - g_lastSecCycle >= (ulong)CycleSeconds * 1000)
+   {
+      g_lastSecCycle = GetTickCount64();
+      SecCycle();
+   }
+   static ulong lastPanel = 0;
+   if(GetTickCount64() - lastPanel < 1000) return;
+   lastPanel = GetTickCount64();
    Panel();
    ExportJson();
    static datetime lastFollow = 0;
