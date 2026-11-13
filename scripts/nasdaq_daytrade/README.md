@@ -35,3 +35,16 @@ Limites :
 - Il fait moins bien que l'indice les années de forte hausse (2019 : -2 % contre +39 %).
 
 ![Courbes d'équité](qqq_momentum.png)
+
+## Couches d'exécution rapide (`nb_hft_variants.py`)
+
+Mêmes signaux, même taille et mêmes frais que la stratégie validée ; seule l'exécution change.
+
+| Version | Trades/jour | CAGR (frais réels) | Max DD | Sharpe | 2014–2018 | 2019–2024 | Frais ×3 |
+|---|---|---|---|---|---|---|---|
+| V0 base : entrée au marché, sortie vérifiée toutes les 30 min | 0,94 | **+15,5 %** | -23 % | 1,06 | +14,9 % | **+16,2 %** | +4,0 % |
+| V1 entrée par ordre limite sur repli | 0,73 | +13,4 % | -21 % | 1,24 | +20,8 % | +6,6 % | +4,6 % |
+| V2 sortie vérifiée chaque minute | 1,34 | +11,8 % | -20 % | 0,92 | +11,2 % | +12,3 % | -3,8 % |
+| V3 limite + sortie chaque minute | 1,03 | +11,0 % | -6 % | 1,76 | +22,3 % | **+0,9 %** | -0,9 % |
+
+Les versions plus rapides gagnent moins, et leur avantage a presque disparu depuis 2019. Elles sont aussi plus sensibles aux frais. Les entrées par ordre limite sont en plus optimistes sur des bougies d'1 minute : le backtest considère l'ordre exécuté dès que le prix touche la limite, sans file d'attente. La version de base reste la meilleure.
