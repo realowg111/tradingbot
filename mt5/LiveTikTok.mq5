@@ -15,9 +15,11 @@
 //| Ajout a la strategie du live : reduction de la rafale si elle    |
 //| perd, la plus grosse position d'abord : -2 %, -3.5 %, puis tout  |
 //| a -5 % du solde. Le reste est identique au live.                 |
+//| Contre les series de pertes : pause de 30 min apres 2 rafales    |
+//| perdantes d'affilee, arret jusqu'au lendemain a -8 % sur le jour.|
 //| Options desactivees par defaut : TrendFilter, MaxBurstMinutes.   |
 //+------------------------------------------------------------------+
-#property version "1.20"
+#property version "1.30"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
@@ -32,6 +34,9 @@ input double ReduceStep1Pct = 2.0;   // Protection 2 : a -x % ferme la plus gros
 input double ReduceStep2Pct = 3.5;   // ... a -x % ferme la plus grosse restante
 input double CloseAllPct    = 5.0;   // ... a -x % ferme tout ce qui reste
 input int    MaxBurstMinutes = 0;    // Option : ferme la rafale si elle n'est pas en gain apres N minutes (0 = off)
+input int    LossStreak     = 2;     // Apres N rafales perdantes d'affilee...
+input int    StreakPauseMin = 30;    // ...pause de N minutes (0 = off)
+input double DailyLossPct   = 8.0;   // Arret jusqu'au lendemain si le compte perd x % dans la journee (0 = off)
 input long   MagicNumber    = 7777;
 
 CTrade trade;
@@ -55,6 +60,11 @@ int      hTrend = INVALID_HANDLE;
 double   worst = 0;
 string   lastEvent = "demarrage";
 string   lastError = "aucune";
+int      losingStreak = 0;         // rafales perdantes d'affilee
+datetime pauseUntil = 0;           // pause apres une serie de pertes (heure serveur)
+int      dayKey = -1;
+double   dayStartBalance = 0;
+bool     dayStopped = false;
 
 //+------------------------------------------------------------------+
 void RecordPrice()
@@ -240,6 +250,17 @@ void Step()
    if(phase == 0)                                    // pause, puis rafale a contre-courant
    {
       if(n > 0) { phase = 1; phaseStart = now; startBalance = AccountInfoDouble(ACCOUNT_BALANCE); return; }
+      // limite par jour et pause apres une serie de pertes
+      MqlDateTime dt; TimeToStruct(TimeTradeServer(), dt);
+      if(dt.day_of_year != dayKey) { dayKey = dt.day_of_year; dayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE); dayStopped = false; }
+      if(DailyLossPct > 0 && !dayStopped && AccountInfoDouble(ACCOUNT_BALANCE) <= dayStartBalance * (1.0 - DailyLossPct / 100.0))
+      {
+         dayStopped = true;
+         lastEvent = "limite du jour atteinte (-" + DoubleToString(DailyLossPct, 1) + " %) : arret jusqu'a demain";
+         Print(lastEvent);
+      }
+      if(dayStopped) return;
+      if(TimeTradeServer() < pauseUntil) return;
       if(now - phaseStart < (ulong)PauseSeconds * 1000 || !allowed) return;
       double move = PriceMove(LookbackSeconds);
       int side = 0;
@@ -264,6 +285,15 @@ void Step()
       lastEvent = "rafale " + IntegerToString(bursts) + " terminee : " + DoubleToString(result, 2) +
                   " (pire moment " + DoubleToString(worst, 2) + ")";
       Print(lastEvent);
+      // serie de pertes : pause
+      if(result < 0) losingStreak++; else losingStreak = 0;
+      if(StreakPauseMin > 0 && LossStreak > 0 && losingStreak >= LossStreak)
+      {
+         pauseUntil = TimeTradeServer() + StreakPauseMin * 60;
+         lastEvent = IntegerToString(losingStreak) + " rafales perdantes d'affilee : pause jusqu'a " + TimeToString(pauseUntil, TIME_MINUTES);
+         Print(lastEvent);
+         losingStreak = 0;
+      }
       phase = 0; phaseStart = now;
       return;
    }
@@ -338,6 +368,8 @@ void OnTimer()
    double profit;
    int n = CountPositions(profit);
    string ph = "PAUSE " + IntegerToString((int)((GetTickCount64() - phaseStart) / 1000)) + "/" + IntegerToString(PauseSeconds) + " s";
+   if(phase == 0 && TimeTradeServer() < pauseUntil) ph = "PAUSE apres une serie de pertes, jusqu'a " + TimeToString(pauseUntil, TIME_MINUTES);
+   if(phase == 0 && dayStopped) ph = "ARRET POUR LA JOURNEE (limite de perte du jour atteinte)";
    if(phase == 1) ph = "RAFALE OUVERTE : on attend +" + DoubleToString(StartClosePct, 1) + " %";
    if(phase == 2) ph = "FERMETURE PROGRESSIVE (plus grosse position gagnante d'abord)";
    double ml = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
@@ -350,7 +382,9 @@ void OnTimer()
            "\nProtections : reduction a -", DoubleToString(ReduceStep1Pct, 1), " % / -", DoubleToString(ReduceStep2Pct, 1),
            " %, tout ferme a -", DoubleToString(CloseAllPct, 1), " %, duree max ", MaxBurstMinutes, " min",
            "\nNiveau de marge : ", (ml > 0 ? DoubleToString(ml, 0) + " %" : "-"),
-           "\nRafales : ", bursts, "   dernier evenement : ", lastEvent,
+           "\nRafales : ", bursts, "   perdantes d'affilee : ", losingStreak,
+           "   resultat du jour : ", (dayStartBalance > 0 ? DoubleToString(100.0 * (AccountInfoDouble(ACCOUNT_BALANCE) / dayStartBalance - 1.0), 1) + " %" : "-"),
+           "\nDernier evenement : ", lastEvent,
            "\nDerniere erreur : ", lastError,
            "\nSolde : ", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2),
            "   Equite : ", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2));
