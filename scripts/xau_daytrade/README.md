@@ -104,3 +104,19 @@ Sans swap, c'est-à-dire en tradant via des futures ou un ETF plutôt qu'un CFD 
 Conclusion : le seul robot qui tient est TSMOM long seul. Il ne gagne pas plus que de garder de l'or, mais il divise par deux la perte maximale (-28 % contre -53 %) et sa pire année est à -8 % au lieu de -31 %. Il reste dehors pendant les baisses (2013, 2015), puis rate une partie des rebonds. Il a fini 7 années sur 17 en positif : les gains arrivent en quelques grosses années (2010, 2011, 2019, 2024, 2025). Le swap CFD coûte environ 3,5 %/an à toute position longue sur l'or.
 
 ![Courbes d'équité](gold_trend.png)
+
+## Nyao Scalper, le meilleur scalper open source sur l'or (`python3 nyao_rebuild_backtest.py`)
+
+[elrizwiraswara/nyao_scalper_mt5](https://github.com/elrizwiraswara/nyao_scalper_mt5) : 248 étoiles, code MQL5 complet, rapports de backtest publiés. Profil par défaut selon l'auteur (testeur MT5, ticks réels en 2026) : 2022 -5,3 %, 2023 -9,0 %, 2024 +0,9 %, 2025 +65,3 %, janvier–septembre 2026 +93,8 %. L'auteur ne publie rien avant 2022.
+
+Reconstruction indépendante des règles principales, lues dans le code source : score de tendance à 4 composantes, filtre de tendance journalière (EMA50 à ±0,5 %), stop à 20 $, paliers tous les 20 $, stop suiveur, verrouillage du profit dès +15 $, sortie quand la tendance se retourne. Simplifications : une position à la fois au lieu de deux, sans filtre des annonces ni pauses. Testée sur 2009–2026.
+
+| | 2009–2021 (jamais publié par l'auteur) | 2022 | 2023 | 2024 | 2025 |
+|---|---|---|---|---|---|
+| Auteur (MT5) | — | -5,3 % | -9,0 % | +0,9 % | +65,3 % |
+| Reconstruction, stop 20 $, frais 0,30 $ | **-66 % au total, 2 années positives sur 13** | -0,6 % | -2,9 % | +12,4 % | +48,9 % |
+| Reconstruction, stop 0,55 % du prix | -383 % au total, 1 année positive sur 13 | -5,1 % | -19,1 % | +11,2 % | +47,6 % |
+
+Sur 2022–2025, la reconstruction retrouve le profil de l'auteur : des pertes en 2022–2023, puis des gains concentrés en 2024–2025. Sur 2009–2021, elle perd 11 années sur 13. Sur 17 ans, le gain moyen par trade est nul (PF 1,00) et 17 % des trades sont gagnants.
+
+Conclusion : les gains publiés viennent de la hausse exceptionnelle de l'or en 2025–2026 (+59 % en 2025), pas d'un avantage durable. Le robot a été mis au point sur la période même où il est testé. Sur les 13 années qu'il n'a jamais vues, il perd.
