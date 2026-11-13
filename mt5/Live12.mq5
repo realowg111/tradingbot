@@ -10,7 +10,9 @@ input int    MinVotes   = 5;      // Votes requis (sur 10)
 input double LotScale   = 0.2;    // Taille des lots (0.2 pour 1000)
 input double TargetPct  = 0.6;    // Ferme tout a +x % du solde
 input double LossPct    = 0.4;    // Ferme tout a -x % du solde
-input int    MaxMinutes = 10;     // Duree max d'une rafale
+input int    MaxMinutes = 10;     // Duree max d'une rafale (minutes)
+input bool   VideoMode  = false;  // true = rythme de la video : 2 votes, rafale fermee apres 6 s, objectif +0.3 %
+input int    MaxSeconds = 0;      // Ferme la rafale apres N secondes (0 = off)
 input long   MagicNumber = 1212;
 
 CTrade trade;
@@ -19,6 +21,10 @@ int score = 0;
 double startBalance = 0;
 datetime openTime = 0;
 int burstSide = 0;
+// reglages effectifs (VideoMode les remplace)
+int    useVotes;
+double useTarget, useLoss;
+int    useSeconds;
 string lastError = "aucune";
 
 //+------------------------------------------------------------------+
@@ -144,14 +150,17 @@ void Manage()
    if(startBalance <= 0) startBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(openTime == 0) openTime = TimeCurrent();
    double pct = 100.0 * profit / startBalance;
-   if(pct >= TargetPct) { CloseAll("objectif"); return; }
-   if(pct <= -LossPct) { CloseAll("limite de perte"); return; }
+   if(pct >= useTarget) { CloseAll("objectif"); return; }
+   if(pct <= -useLoss) { CloseAll("limite de perte"); return; }
+   if(useSeconds > 0 && (long)(TimeCurrent() - openTime) >= (long)useSeconds) { CloseAll("duree max (secondes)"); return; }
    if((long)(TimeCurrent() - openTime) >= (long)MaxMinutes * 60) { CloseAll("duree max"); return; }
 }
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   useVotes = MinVotes; useTarget = TargetPct; useLoss = LossPct; useSeconds = MaxSeconds;
+   if(VideoMode) { useVotes = 2; useTarget = 0.3; useLoss = 0.4; useSeconds = 6; }
    trade.SetExpertMagicNumber((ulong)MagicNumber);
    trade.SetDeviationInPoints(50);
    // mode d'execution accepte par le courtier (sinon les ordres sont refuses)
@@ -164,7 +173,7 @@ int OnInit()
    hEMA20 = iMA(_Symbol, PERIOD_M1, 20, 0, MODE_EMA, PRICE_CLOSE);
    hEMAH1 = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
    hBB    = iBands(_Symbol, PERIOD_M1, 20, 0, 2.0, PRICE_CLOSE);
-   EventSetTimer(2);
+   EventSetTimer(1);
    return INIT_SUCCEEDED;
 }
 
@@ -187,8 +196,8 @@ void OnTimer()
    double profit;
    int n = CountPositions(profit);
    int side = 0;
-   if(score >= MinVotes) side = 1;
-   if(score <= -MinVotes) side = -1;
+   if(score >= useVotes) side = 1;
+   if(score <= -useVotes) side = -1;
 
    if(n > 0 && side != 0 && side != burstSide) { CloseAll("signal inverse"); n = 0; }
    if(n == 0 && side != 0) OpenBurst(side);
@@ -201,7 +210,8 @@ void OnTimer()
    Comment("LIVE 12  -  ", _Symbol,
            "\nTrading autorise : ", allowed,
            "\nDerniere erreur d'ordre : ", lastError,
-           "\nScore : ", score, " (requis +/-", MinVotes, ")",
+           "\nScore : ", score, " (requis +/-", useVotes, ")",
+           "\nMode video : ", (VideoMode ? "OUI" : "non"), "   duree max rafale : ", (useSeconds > 0 ? IntegerToString(useSeconds) + " s" : IntegerToString(MaxMinutes) + " min"),
            "\nACHAT ", DoubleToString(buyPct, 0), " %   VENTE ", DoubleToString(100 - buyPct, 0), " %",
            "\nPositions : ", n, "   Resultat : ", DoubleToString(profit, 2),
            "\nSolde : ", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2));
