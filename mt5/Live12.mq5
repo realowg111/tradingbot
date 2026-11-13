@@ -7,18 +7,20 @@
 //| 3. SORTIES  : chaque position a son TP ; la plus grosse a le TP  |
 //|               le plus proche et se ferme en premier en profit,   |
 //|               puis le reste suit (stop a l'entree, puis suiveur) |
-//| 4. PERTES   : rafale fermee si pas gagnante apres N secondes,    |
-//|               ou si la perte atteint la limite                   |
+//| 4. PERTES   : rafale fermee si le prix n'est pas parti dans le   |
+//|               bon sens apres N s, ou s'il va contre elle de      |
+//|               x ATR (le spread n'est pas compte comme une perte) |
 //| 5. retour a l'analyse, en boucle                                 |
 //+------------------------------------------------------------------+
 #property version "2.00"
 #include <Trade\Trade.mqh>
 
 input int    ReadSeconds  = 4;      // Analyse avant chaque rafale (secondes)
-input double LotScale     = 0.2;    // Taille des lots (0.2 pour 1000)
+input double LotScale     = 0.1;    // Taille des lots (0.1 pour 600, 0.2 pour 1000)
 input double TPScale      = 1.0;    // Multiplie toutes les distances de TP
-input double LossPct      = 0.4;    // Ferme tout si la perte atteint x % du solde
-input int    CutSeconds   = 20;     // Ferme tout si la rafale n'est pas gagnante apres N s
+input double LossATR      = 0.6;    // Ferme tout si le prix va contre la rafale de x ATR (spread non compte)
+input double HardLossPct  = 3.0;    // Securite : ferme tout si la perte atteint x % du solde
+input int    CutSeconds   = 30;     // Ferme tout si le prix n'est pas alle dans le bon sens apres N s
 input int    MaxSeconds   = 180;    // Duree max d'une rafale
 input double TrailATR     = 0.3;    // Distance du stop suiveur du reste, en ATR
 input double SafetySL_ATR = 2.0;    // Stop de securite chez le courtier, en ATR (coupure)
@@ -220,6 +222,26 @@ void FollowRest()
    }
 }
 
+//--- mouvement du prix en faveur de la rafale, spread exclu (achat : ask vs ask, vente : bid vs bid)
+double BasketMove()
+{
+   double sum = 0, vol = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      double v = PositionGetDouble(POSITION_VOLUME);
+      sum += PositionGetDouble(POSITION_PRICE_OPEN) * v;
+      vol += v;
+   }
+   if(vol <= 0) return 0;
+   double avgOpen = sum / vol;
+   if(burstSide > 0) return SymbolInfoDouble(_Symbol, SYMBOL_ASK) - avgOpen;
+   return avgOpen - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+}
+
 //--- gestion de la rafale ouverte
 void Manage()
 {
@@ -230,9 +252,11 @@ void Manage()
 
    double pct = 100.0 * (AccountInfoDouble(ACCOUNT_EQUITY) - startBalance) / startBalance;
    long age = (long)(TimeTradeServer() - openTime);
+   double move = BasketMove();                         // > 0 : le prix va dans le bon sens
 
-   if(pct <= -LossPct) { EndBurst("limite de perte"); return; }
-   if(n == burstSize && age >= CutSeconds && profit <= 0) { EndBurst("pas gagnante apres " + IntegerToString(CutSeconds) + " s"); return; }
+   if(atr > 0 && move <= -LossATR * atr) { EndBurst("limite de perte (prix contre la rafale)"); return; }
+   if(pct <= -HardLossPct) { EndBurst("securite : perte du compte"); return; }
+   if(n == burstSize && age >= CutSeconds && move <= 0) { EndBurst("pas partie dans le bon sens apres " + IntegerToString(CutSeconds) + " s"); return; }
    if(age >= MaxSeconds) { EndBurst("duree max"); return; }
    if(n < burstSize) FollowRest();                 // le gros lot est sorti en profit : le reste suit
 }
