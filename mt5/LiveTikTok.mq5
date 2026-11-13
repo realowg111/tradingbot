@@ -21,7 +21,7 @@
 //| arret jusqu'au lendemain a -8 % sur le jour.                     |
 //| Options desactivees par defaut : TrendFilter, MaxBurstMinutes.   |
 //+------------------------------------------------------------------+
-#property version "1.60"
+#property version "1.70"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
@@ -81,6 +81,14 @@ double   gaugeSum = 0;             // lecture de la jauge pendant la pause
 int      gaugeN = 0;
 int      flips = 0;                // basculements haussier / baissier pendant la pause
 int      lastSentiment = 0;
+// suivi de la jauge seconde par seconde
+ulong    lastGaugeTick = 0;
+int      liveSent = 0;               // sentiment de la derniere seconde : 1 haussier, -1 baissier, 0 neutre
+datetime liveSentSince = 0;          // debut du sentiment actuel
+string   timeline = "";              // 30 dernieres secondes : + haussier, - baissier, . neutre
+datetime flipTimes[60];              // heures des dernieres bascules
+int      flipHead = 0, flipCount = 0;
+string   flipLog[3];                 // 3 dernieres bascules
 double   worst = 0;
 string   lastEvent = "demarrage";
 string   lastError = "aucune";
@@ -576,8 +584,44 @@ void OnDeinit(const int reason)
 
 void OnTick() { Step(); }
 
+//--- toutes les secondes : sentiment et pourcentages, bascules
+void GaugeEverySecond()
+{
+   if(GetTickCount64() - lastGaugeTick < 1000) return;
+   lastGaugeTick = GetTickCount64();
+   if(!ComputeScore()) return;
+   int sent = (score > 0 ? 1 : (score < 0 ? -1 : 0));
+   timeline += (sent > 0 ? "+" : (sent < 0 ? "-" : "."));
+   if(StringLen(timeline) > 30) timeline = StringSubstr(timeline, StringLen(timeline) - 30);
+   datetime now = TimeTradeServer();
+   if(sent != liveSent)
+   {
+      if(sent != 0 && liveSent != 0)                     // vraie bascule haussier <-> baissier
+      {
+         flipTimes[flipHead] = now; flipHead = (flipHead + 1) % 60;
+         if(flipCount < 60) flipCount++;
+         string line = TimeToString(now, TIME_SECONDS) + "  " + (liveSent > 0 ? "HAUSSIER" : "BAISSIER") + " -> " +
+                       (sent > 0 ? "HAUSSIER" : "BAISSIER") + "  (ACHAT " + DoubleToString(50.0 + 5.0 * score, 0) +
+                       " % / VENTE " + DoubleToString(50.0 - 5.0 * score, 0) + " %)";
+         flipLog[2] = flipLog[1]; flipLog[1] = flipLog[0]; flipLog[0] = line;
+         Print("Bascule ", line);
+      }
+      liveSent = sent;
+      liveSentSince = now;
+   }
+}
+
+int FlipsLastMinute()
+{
+   int k = 0;
+   datetime now = TimeTradeServer();
+   for(int i = 0; i < flipCount; i++) if(now - flipTimes[i] <= 60) k++;
+   return k;
+}
+
 void OnTimer()
 {
+   GaugeEverySecond();
    Step();
    double profit;
    int n = CountPositions(profit);
@@ -591,8 +635,11 @@ void OnTimer()
            "\nPhase : ", ph,
            "\nPositions : ", n, "   resultat en cours : ", DoubleToString(profit, 2),
            "   (", (startBalance > 0 ? DoubleToString(100.0 * profit / startBalance, 2) : "0"), " %)",
-           "\nJAUGE : ACHAT ", DoubleToString(50.0 + 5.0 * score, 0), " %   VENTE ", DoubleToString(50.0 - 5.0 * score, 0), " %   sentiment : ",
-           (score > 0 ? "HAUSSIER" : (score < 0 ? "BAISSIER" : "NEUTRE")), "   (score ", score, ")",
+           "\nJAUGE (chaque seconde) : ACHAT ", DoubleToString(50.0 + 5.0 * score, 0), " %   VENTE ", DoubleToString(50.0 - 5.0 * score, 0),
+           " %   sentiment : ", (liveSent > 0 ? "HAUSSIER" : (liveSent < 0 ? "BAISSIER" : "NEUTRE")),
+           " depuis ", IntegerToString((int)(TimeTradeServer() - liveSentSince)), " s   (score ", score, ")",
+           "\n30 dernieres secondes : ", timeline, "   bascules sur 1 min : ", FlipsLastMinute(),
+           "\nDernieres bascules : ", flipLog[0], (StringLen(flipLog[1]) > 0 ? "  |  " + flipLog[1] : ""),
            "\nLecture pendant la pause : moyenne ", (gaugeN > 0 ? DoubleToString(50.0 + 5.0 * gaugeSum / gaugeN, 0) + " % achat" : "-"),
            ", basculements ", flips, "   mode : ", (DirectionMode == 0 ? "jauge" : (DirectionMode == 1 ? "jauge + contre-courant" : "contre-courant")),
            " (confiance min ", DoubleToString(MinConfidence, 0), " %)",
