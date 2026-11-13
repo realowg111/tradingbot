@@ -12,18 +12,31 @@
 //|  5. des que le gain atteint +x % : fermeture progressive, la plus |
 //|     grosse position gagnante d'abord, une toutes les 0.7 s       |
 //|  6. retour a la pause, en boucle                                 |
-//| DEMO UNIQUEMENT : sans stop et avec ce levier, une rafale qui ne |
-//| revient pas fait perdre la plus grande partie du compte.         |
+//| Protections (le style reste le meme) :                           |
+//|  - contre-courant seulement dans le sens de la tendance de fond  |
+//|  - reduction de la rafale si elle perd : plus grosse position    |
+//|    fermee a -2 %, puis -3.5 %, tout a -5 %                        |
+//|  - fermeture apres 15 min sans gain                              |
+//|  - rafales plus petites (20 % de la marge au lieu de 70 %)       |
+//| Pour la version exacte du live : MarginUse 0.70, TrendFilter     |
+//| false, ReduceStep1Pct/ReduceStep2Pct/CloseAllPct 0,              |
+//| MaxBurstMinutes 0.                                               |
 //+------------------------------------------------------------------+
-#property version "1.00"
+#property version "1.10"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
 input int    LookbackSeconds = 20;   // Mouvement regarde pour choisir le sens (contre-courant)
-input double MarginUse      = 0.70;  // Part du solde utilisee en marge par la rafale (0.70 = niveau de marge ~140 %)
+input double MarginUse      = 0.20;  // Part du solde utilisee en marge par la rafale (live : 0.70 ; protege : 0.20)
 input double StartClosePct  = 3.0;   // Debut des fermetures quand la rafale gagne x % du solde
 input int    CloseEveryMs   = 700;   // Une fermeture toutes les N millisecondes
 input double EmergencyPct   = 0.0;   // Arret d'urgence a -x % du solde (0 = aucun, comme le live)
+
+input bool   TrendFilter    = true;  // Protection 1 : contre-courant seulement dans le sens de la tendance de fond (EMA 50 H1)
+input double ReduceStep1Pct = 2.0;   // Protection 2 : a -x % ferme la plus grosse position (0 = off)
+input double ReduceStep2Pct = 3.5;   // ... a -x % ferme la plus grosse restante
+input double CloseAllPct    = 5.0;   // ... a -x % ferme tout ce qui reste
+input int    MaxBurstMinutes = 15;   // Protection 3 : ferme la rafale si elle n'est pas en gain apres N minutes (0 = off)
 input long   MagicNumber    = 7777;
 
 CTrade trade;
@@ -42,6 +55,8 @@ ulong    lastClose = 0;
 int      lastSide = 0;
 double   startBalance = 0;
 int      bursts = 0;
+int      reduceStage = 0;          // paliers de reduction deja appliques a la rafale
+int      hTrend = INVALID_HANDLE;
 double   worst = 0;
 string   lastEvent = "demarrage";
 string   lastError = "aucune";
@@ -118,6 +133,7 @@ void OpenBurst(int side)
 
    startBalance = balance;
    worst = 0;
+   reduceStage = 0;
    int opened = 0;
    for(int i = 0; i < 7; i++)
    {
@@ -170,6 +186,41 @@ bool CloseBiggestWinner()
    return true;
 }
 
+//--- ferme la plus grosse position, gagnante ou non (reduction de la rafale)
+void CloseBiggest(string why)
+{
+   ulong best = 0;
+   double bestVol = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      double v = PositionGetDouble(POSITION_VOLUME);
+      if(v > bestVol) { bestVol = v; best = t; }
+   }
+   if(best == 0) return;
+   double p = 0;
+   if(PositionSelectByTicket(best)) p = PositionGetDouble(POSITION_PROFIT);
+   if(trade.PositionClose(best))
+   {
+      lastEvent = why + " : " + DoubleToString(bestVol, 2) + " lot ferme a " + DoubleToString(p, 2);
+      Print(lastEvent);
+   }
+}
+
+//--- sens de la tendance de fond : 1 haussiere, -1 baissiere, 0 inconnue
+int TrendSide()
+{
+   double v[];
+   if(hTrend == INVALID_HANDLE || CopyBuffer(hTrend, 0, 0, 1, v) < 1) return 0;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(bid > v[0]) return 1;
+   if(bid < v[0]) return -1;
+   return 0;
+}
+
 void CloseAll()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -201,6 +252,11 @@ void Step()
       if(move > 0) side = -1;                         // le prix a monte : vente
       if(side == 0) side = -lastSide;                 // pas de mouvement : on alterne
       if(side == 0) side = 1;
+      if(TrendFilter)
+      {
+         int tr = TrendSide();
+         if(tr != 0 && side != tr) { lastEvent = "attend : contre-courant oppose a la tendance de fond"; return; }
+      }
       OpenBurst(side);
       return;
    }
@@ -228,6 +284,28 @@ void Step()
       return;
    }
 
+   // protection 2 : reduction de la rafale, la plus grosse position d'abord
+   if(phase == 1)
+   {
+      if(CloseAllPct > 0 && pct <= -CloseAllPct)
+      {
+         CloseAll();
+         lastEvent = "limite de la rafale " + DoubleToString(pct, 1) + " % : tout ferme";
+         Print(lastEvent);
+         return;
+      }
+      if(reduceStage == 0 && ReduceStep1Pct > 0 && pct <= -ReduceStep1Pct) { reduceStage = 1; CloseBiggest("reduction 1"); return; }
+      if(reduceStage == 1 && ReduceStep2Pct > 0 && pct <= -ReduceStep2Pct) { reduceStage = 2; CloseBiggest("reduction 2"); return; }
+      // protection 3 : duree maximale sans gain
+      if(MaxBurstMinutes > 0 && now - phaseStart >= (ulong)MaxBurstMinutes * 60000 && profit <= 0)
+      {
+         CloseAll();
+         lastEvent = "rafale fermee apres " + IntegerToString(MaxBurstMinutes) + " min sans gain";
+         Print(lastEvent);
+         return;
+      }
+   }
+
    if(phase == 1 && pct >= StartClosePct) { phase = 2; lastClose = 0; }
 
    if(phase == 2 && now - lastClose >= (ulong)CloseEveryMs)
@@ -246,6 +324,7 @@ int OnInit()
    else if((filling & SYMBOL_FILLING_IOC) == SYMBOL_FILLING_IOC) trade.SetTypeFilling(ORDER_FILLING_IOC);
    else trade.SetTypeFilling(ORDER_FILLING_RETURN);
    phaseStart = GetTickCount64();
+   hTrend = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
    EventSetMillisecondTimer(250);
    return INIT_SUCCEEDED;
 }
@@ -267,11 +346,14 @@ void OnTimer()
    if(phase == 1) ph = "RAFALE OUVERTE : on attend +" + DoubleToString(StartClosePct, 1) + " %";
    if(phase == 2) ph = "FERMETURE PROGRESSIVE (plus grosse position gagnante d'abord)";
    double ml = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
-   Comment("LIVE TIKTOK  -  ", _Symbol, "   (DEMO UNIQUEMENT : aucun stop)",
+   Comment("LIVE TIKTOK  -  ", _Symbol, "   (version protegee)",
            "\nPhase : ", ph,
            "\nPositions : ", n, "   resultat en cours : ", DoubleToString(profit, 2),
            "   (", (startBalance > 0 ? DoubleToString(100.0 * profit / startBalance, 2) : "0"), " %)",
            "\nMouvement du prix sur ", LookbackSeconds, " s : ", DoubleToString(PriceMove(LookbackSeconds), 2),
+           "   tendance de fond : ", (TrendSide() > 0 ? "HAUSSIERE (achats sur les creux)" : (TrendSide() < 0 ? "BAISSIERE (ventes sur les rebonds)" : "-")),
+           "\nProtections : reduction a -", DoubleToString(ReduceStep1Pct, 1), " % / -", DoubleToString(ReduceStep2Pct, 1),
+           " %, tout ferme a -", DoubleToString(CloseAllPct, 1), " %, duree max ", MaxBurstMinutes, " min",
            "\nNiveau de marge : ", (ml > 0 ? DoubleToString(ml, 0) + " %" : "-"),
            "\nRafales : ", bursts, "   dernier evenement : ", lastEvent,
            "\nDerniere erreur : ", lastError,
