@@ -244,3 +244,17 @@ Simulation sur l'or 2024–2025 (`scripts/xau_daytrade/tiktok_protected_sim.py`,
 | 10 % + tendance + réduction + 15 min | 100 % | 8,4 jours | 34 % |
 
 Les protections ralentissent la perte, de quelques heures à plus d'une semaine, mais ne l'empêchent pas. La stratégie elle-même n'a pas d'avantage : entrer à contre-courant toutes les quelques minutes gagne en moyenne autant que ça perd, et chaque rafale paie un spread d'environ 0,6 % du compte à 20 % de marge. Les protections changent seulement la façon de perdre : soit de rares grosses pertes, soit des pertes moyennes plus fréquentes.
+
+## Test : sortie par la jauge au lieu de paliers fixes (`scripts/xau_daytrade/tiktok_gauge_exit_sim.py`)
+
+Idée testée : on garde la rafale tant que la jauge des 12 indicateurs n'est pas nettement contre nous, et on ferme tout quand elle bascule au-delà d'un seuil (60 à 90 % contre nous), avec une sécurité à -5 %. Entrée du côté de la jauge (confiance ≥ 60 %). Or 2024–2025, 99 essais de 30 jours, 500 au départ.
+
+| Taille des rafales | Sortie | Comptes perdus | Comptes en hausse après 30 j | Rafales gagnantes |
+|---|---|---|---|---|
+| 85 % de marge | paliers fixes / jauge (tous seuils) | 100 % en 0,4 jour | 0 % | 12–15 % |
+| 20 % de marge | paliers fixes | 100 % (2,5 j) | 0 % | 26 % |
+| 20 % de marge | jauge ≥ 70 % contre nous | 100 % (2,0 j) | 0 % | 47 % |
+| 5 % de marge | paliers fixes | 12 % | 0 % | 32 % |
+| 5 % de marge | jauge ≥ 80 % contre nous | 58 % | 0 % | 48 % |
+
+Sortir par la jauge fait bien revenir plus de rafales en gain (47–48 % contre 26–32 %). Mais quand la jauge bascule trop tard, la perte est plus grosse : le résultat global n'est pas meilleur, et aucun compte n'est en hausse après 30 jours. À 85 % de marge, le spread (environ 2,7 % du solde par rafale) écrase toutes les règles de sortie.
