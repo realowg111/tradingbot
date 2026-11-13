@@ -217,7 +217,7 @@ void OnTimer()
    double conf = 50.0;
    if(score > 0) { nowSide = 1; conf = buyPct; }
    if(score < 0) { nowSide = -1; conf = 100.0 - buyPct; }
-   bool strong = (nowSide != 0 && conf >= useConf && MathAbs(score) >= useVotes);
+   bool strong = (nowSide != 0 && conf >= useConf && (score >= useVotes || score <= -useVotes));
    if(strong && nowSide == readSide) { readCount++; readSum += conf; }
    else if(strong) { readSide = nowSide; readCount = 1; readSum = conf; }
    else { readSide = 0; readCount = 0; readSum = 0; }
