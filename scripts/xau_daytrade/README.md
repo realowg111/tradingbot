@@ -157,3 +157,19 @@ Mêmes entrées que le scalper à 12 indicateurs (or, 5 min, 2009–2026). On aj
 Grille de 27 combinaisons avec frais ECN : 0 positive. Les meilleures obtiennent bien des pertes moyennes (0,6 R) deux fois plus petites que les gains moyens (1,2 R), mais elles ne gagnent que 28 à 30 % de leurs trades.
 
 Conclusion : ces techniques changent la forme des résultats (moins de gagnants, mais des gains plus gros que les pertes), pas leur somme. Sans frais, le stop suiveur arrive à peine au-dessus de zéro (+0,02 R par trade), et seulement avant 2018. Avec environ 18 trades par jour, les frais (environ 0,1 R par trade) font repasser le résultat dans le négatif. Une vidéo qui ne montre que des pertes de -0,10 € et des gains de +10 € montre une série favorable, pas la moyenne.
+
+## Simulation du live TikTok « HFT ROBOT » (`tiktok_live_sim.py`)
+
+Règles lues sur le téléphone du live : rafales de 6 positions (0,51 lot au total pour 500 de solde), sans stop ni TP, conservées pendant les baisses, puis fermées ensemble à +3 % du solde. Sens donné par les votes des indicateurs. Hypothèses courtier : levier 1:500, stop-out à 50 % de marge, spread de 0,25 $. Données : or 2024–2025 en bougies de 5 minutes, 99 essais de 30 jours maximum, chacun démarrant avec 500.
+
+| | Résultat |
+|---|---|
+| Rafales gagnantes | **91 %** |
+| Comptes perdus (solde sous 50) | **100 % des essais** |
+| Temps avant de tout perdre | **médiane 0,5 jour** (25 % des cas en moins de 0,2 jour) |
+| Plus haut atteint avant la perte | médiane 597, parfois 1 500 à 1 800 |
+| Stop-out du courtier | 300 rafales sur 3 453 |
+
+C'est le même résultat avec un levier de 1:2 000 (comptes perdus en 0,3 jour en médiane) et avec des objectifs de +1 % ou +6 %. Avec un levier de 1:100, ces tailles ne peuvent même pas être ouvertes (marge insuffisante).
+
+Le live est fidèle à ce que montre la simulation : neuf rafales sur dix gagnent, et le compte monte vite, parfois ×3 en une journée. Mais une seule rafale qui ne revient pas déclenche le stop-out, qui coûte environ 60 % du compte d'un coup. Deux ou trois suffisent pour tout perdre, en général en moins d'une journée.
