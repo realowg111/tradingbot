@@ -1,325 +1,401 @@
 //+------------------------------------------------------------------+
 //| Scalper12Live.mq5                                                |
-//| One behaviour only, the one of the TikTok live, with limits:     |
-//|  - every 2 s, 12 indicators vote on the live price -> gauge     |
-//|  - 5 of 10 votes aligned -> a burst of 6 positions at once,      |
-//|    without individual SL/TP                                      |
-//|  - the burst is managed as one basket:                           |
-//|      closed at +0.6 % of the balance (target)                    |
-//|      closed at -0.4 % of the balance (loss limit)                |
-//|      once it reached +0.3 %, closed if it falls back to half     |
-//|      of its best gain                                            |
-//|      closed after 10 minutes or if the signal flips              |
-//| Demo first. Python tests of these indicators on 2009-2026 gold   |
-//| did not find a lasting edge after costs.                         |
+//| 12 indicateurs votent, rafale de 6 positions, geree comme un     |
+//| panier : objectif +0.6 %, limite -0.4 %, gain protege.           |
+//| Version simplifiee : uniquement des fonctions MQL5 de base.      |
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
-#property version   "1.10"
+#property version   "2.00"
 
-#include <Trade/Trade.mqh>
+#include <Trade\Trade.mqh>
 
-input group "Signal"
-input int    MinVotes         = 5;      // Votes alignes requis (sur 10)
-input int    CycleSeconds     = 2;      // Un calcul toutes les N secondes
-input bool   LiveVotes        = true;   // Votes sur le prix en direct (sinon sur la derniere bougie M1 cloturee)
-
-input group "Rafale"
-input string Lots             = "0.30,0.20,0.15,0.10,0.05,0.05"; // Lots de la rafale
-input double LotScale         = 0.2;    // Multiplie tous les lots (0.2 conseille pour 1 000)
-
-input group "Panier (en % du solde)"
-input double TargetPct        = 0.6;    // Objectif : ferme toute la rafale a +x %
-input double LossLimitPct     = 0.4;    // Limite : ferme toute la rafale a -x %
-input double LockStartPct     = 0.3;    // Protection : des que la rafale a atteint +x %...
-input double LockKeepPct      = 50.0;   // ...ferme si elle retombe sous ce % de son meilleur gain
-input int    MaxMinutes       = 10;     // Duree max d'une rafale
-input bool   CloseOnFlip      = true;   // Ferme la rafale si le signal s'inverse
-
-input group "Divers"
-input double MaxSpreadATR     = 0.5;    // Pas de rafale si spread > x ATR(14) M1
-input long   Magic            = 34343434;
+//--- reglages
+input int    MinVotes      = 5;       // Votes alignes requis (sur 10)
+input int    CycleSeconds  = 2;       // Un calcul toutes les N secondes
+input double LotScale      = 0.2;     // Multiplie les lots (0.2 pour 1000)
+input double Lot1          = 0.30;    // Lots de la rafale
+input double Lot2          = 0.20;
+input double Lot3          = 0.15;
+input double Lot4          = 0.10;
+input double Lot5          = 0.05;
+input double Lot6          = 0.05;
+input double TargetPct     = 0.6;     // Ferme la rafale a +x % du solde
+input double LossLimitPct  = 0.4;     // Ferme la rafale a -x % du solde
+input double LockStartPct  = 0.3;     // Des +x %...
+input double LockKeepPct   = 50.0;    // ...ferme si le gain retombe sous ce % du meilleur
+input int    MaxMinutes    = 10;      // Duree max d'une rafale
+input bool   CloseOnFlip   = true;    // Ferme si le signal s'inverse
+input double MaxSpreadATR  = 0.5;     // Pas de rafale si spread > x ATR
+input long   MagicNumber   = 34343434;
 
 CTrade trade;
-int hRSI, hMACD, hEMA20, hEMAH1, hBB, hATR, hATR100;
 
-string g_names[12] = {"RSI 14", "Tendance H1", "Ecart MM20", "MACD", "Structure", "Bollinger",
-                      "Volatilite", "VWAP", "Momentum 5", "Momentum 15", "Cassure", "Alignement"};
-double g_vals[12];
-int    g_votes[12];
-int    g_score = 0;
-double g_pBuy = 0.5, g_atr = 0;
-long   g_calc = 0;
-string g_status = "demarrage...";
-string g_journal[10];
-int    g_jn = 0;
-ulong  g_lastCycle = 0;
+int hRSI   = INVALID_HANDLE;
+int hMACD  = INVALID_HANDLE;
+int hEMA20 = INVALID_HANDLE;
+int hEMAH1 = INVALID_HANDLE;
+int hBB    = INVALID_HANDLE;
+int hATR   = INVALID_HANDLE;
+int hATR100 = INVALID_HANDLE;
 
-int    g_side = 0;              // direction of the open burst
-double g_ref = 0;               // balance when the burst was opened
-double g_best = 0;              // best basket gain in %
-datetime g_openTime = 0;
-int    g_baskets = 0, g_basketWins = 0;
-double g_sumWin = 0, g_sumLoss = 0;
+string gNames[12];
+double gVals[12];
+int    gVotes[12];
+int    gScore = 0;
+double gBuy = 0.5;
+double gAtr = 0.0;
+int    gCalc = 0;
+string gStatus = "demarrage";
+string gLog[8];
+
+int      gSide = 0;
+double   gRef = 0.0;
+double   gBest = 0.0;
+datetime gOpenTime = 0;
+int      gBaskets = 0;
+int      gWins = 0;
+double   gSumWin = 0.0;
+double   gSumLoss = 0.0;
 
 //+------------------------------------------------------------------+
-void J(string s)
+void AddLog(string s)
 {
-   for(int i = 9; i > 0; i--) g_journal[i] = g_journal[i - 1];
-   g_journal[0] = TimeToString(TimeCurrent(), TIME_SECONDS) + "  " + s;
-   if(g_jn < 10) g_jn++;
+   for(int i = 7; i > 0; i--)
+      gLog[i] = gLog[i - 1];
+   gLog[0] = TimeToString(TimeCurrent(), TIME_SECONDS) + "  " + s;
    Print("[Live12] ", s);
 }
 
-double Buf(int h, int b, int shift)
+double ReadBuf(int handle, int buffer, int shift)
 {
-   double x[];
-   if(CopyBuffer(h, b, shift, 1, x) < 1) return EMPTY_VALUE;
-   return x[0];
+   double v[];
+   if(CopyBuffer(handle, buffer, shift, 1, v) < 1)
+      return EMPTY_VALUE;
+   return v[0];
+}
+
+int Sign(double x)
+{
+   if(x > 0) return 1;
+   if(x < 0) return -1;
+   return 0;
 }
 
 //+------------------------------------------------------------------+
-//| 12 indicators -> votes, score and gauge                          |
+//| Les 12 indicateurs                                               |
 //+------------------------------------------------------------------+
-bool Read()
+bool ReadIndicators()
 {
    MqlRates r[];
    ArraySetAsSeries(r, true);
-   if(CopyRates(_Symbol, PERIOD_M1, 0, 40, r) < 40) return false;
-   int b = LiveVotes ? 0 : 1;                                  // 0 = forming bar, follows the live price
-   double c = LiveVotes ? (SymbolInfoDouble(_Symbol, SYMBOL_BID) + SymbolInfoDouble(_Symbol, SYMBOL_ASK)) / 2.0 : r[1].close;
-   double rsi = Buf(hRSI, 0, b), macd = Buf(hMACD, 0, b), sig = Buf(hMACD, 1, b);
-   double e20 = Buf(hEMA20, 0, b), eh1 = Buf(hEMAH1, 0, 0), mid = Buf(hBB, 0, b);
-   double atr = Buf(hATR, 0, 1), atr100 = Buf(hATR100, 0, 1);
-   if(rsi == EMPTY_VALUE || macd == EMPTY_VALUE || e20 == EMPTY_VALUE || eh1 == EMPTY_VALUE ||
-      mid == EMPTY_VALUE || atr == EMPTY_VALUE || atr100 == EMPTY_VALUE || atr <= 0) return false;
+   if(CopyRates(_Symbol, PERIOD_M1, 0, 40, r) < 40)
+      return false;
 
-   // VWAP of the day (tick volume)
-   MqlDateTime d; TimeToStruct(TimeCurrent(), d); d.hour = 0; d.min = 0; d.sec = 0;
-   MqlRates day[];
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double c = (bid + ask) / 2.0;                       // prix en direct
+
+   double rsi    = ReadBuf(hRSI, 0, 0);
+   double macd   = ReadBuf(hMACD, 0, 0);
+   double sig    = ReadBuf(hMACD, 1, 0);
+   double e20    = ReadBuf(hEMA20, 0, 0);
+   double eh1    = ReadBuf(hEMAH1, 0, 0);
+   double mid    = ReadBuf(hBB, 0, 0);
+   double atr    = ReadBuf(hATR, 0, 1);
+   double atr100 = ReadBuf(hATR100, 0, 1);
+   if(rsi == EMPTY_VALUE || macd == EMPTY_VALUE || sig == EMPTY_VALUE || e20 == EMPTY_VALUE ||
+      eh1 == EMPTY_VALUE || mid == EMPTY_VALUE || atr == EMPTY_VALUE || atr100 == EMPTY_VALUE)
+      return false;
+   if(atr <= 0.0 || atr100 <= 0.0)
+      return false;
+
+   // VWAP du jour (volume de ticks)
    double vwap = c;
+   MqlDateTime d;
+   TimeToStruct(TimeCurrent(), d);
+   d.hour = 0; d.min = 0; d.sec = 0;
+   MqlRates day[];
    int n = CopyRates(_Symbol, PERIOD_M1, StructToTime(d), TimeCurrent(), day);
    if(n > 1)
    {
-      double pv = 0, v = 0;
+      double pv = 0.0, vv = 0.0;
       for(int i = 0; i < n - 1; i++)
       {
-         double vol = (day[i].tick_volume > 0 ? (double)day[i].tick_volume : 1.0);
-         pv += (day[i].high + day[i].low + day[i].close) / 3.0 * vol; v += vol;
+         double vol = 1.0;
+         if(day[i].tick_volume > 0) vol = (double)day[i].tick_volume;
+         pv += (day[i].high + day[i].low + day[i].close) / 3.0 * vol;
+         vv += vol;
       }
-      vwap = pv / v;
+      if(vv > 0.0) vwap = pv / vv;
    }
-   double hi12 = r[b + 1].high, lo12 = r[b + 1].low, hi20 = r[b + 1].high, lo20 = r[b + 1].low;
-   for(int i = b + 1; i <= b + 20; i++)
+
+   double hi12 = r[1].high, lo12 = r[1].low, hi20 = r[1].high, lo20 = r[1].low;
+   for(int k = 1; k <= 20; k++)
    {
-      if(i <= b + 12) { hi12 = MathMax(hi12, r[i].high); lo12 = MathMin(lo12, r[i].low); }
-      hi20 = MathMax(hi20, r[i].high); lo20 = MathMin(lo20, r[i].low);
+      if(k <= 12)
+      {
+         if(r[k].high > hi12) hi12 = r[k].high;
+         if(r[k].low < lo12) lo12 = r[k].low;
+      }
+      if(r[k].high > hi20) hi20 = r[k].high;
+      if(r[k].low < lo20) lo20 = r[k].low;
    }
-   g_atr = atr;
-   g_vals[0] = rsi;                     g_votes[0] = rsi > 55 ? 1 : (rsi < 45 ? -1 : 0);
-   g_vals[1] = (c - eh1) / atr;         g_votes[1] = c > eh1 ? 1 : (c < eh1 ? -1 : 0);
-   g_vals[2] = (c - e20) / atr;         g_votes[2] = c > e20 ? 1 : (c < e20 ? -1 : 0);
-   g_vals[3] = (macd - sig) / atr;      g_votes[3] = macd > sig ? 1 : (macd < sig ? -1 : 0);
-   double m12 = (hi12 + lo12) / 2;
-   g_vals[4] = (c - m12) / atr;         g_votes[4] = c > m12 ? 1 : (c < m12 ? -1 : 0);
-   g_vals[5] = (c - mid) / atr;         g_votes[5] = c > mid ? 1 : (c < mid ? -1 : 0);
-   g_vals[6] = atr / atr100;            g_votes[6] = 0;
-   g_vals[7] = (c - vwap) / atr;        g_votes[7] = c > vwap ? 1 : (c < vwap ? -1 : 0);
-   double m5 = r[b + 5].close, m15 = r[b + 15].close;
-   g_vals[8] = (c - m5) / atr;          g_votes[8] = c > m5 ? 1 : (c < m5 ? -1 : 0);
-   g_vals[9] = (c - m15) / atr;         g_votes[9] = c > m15 ? 1 : (c < m15 ? -1 : 0);
-   g_vals[10] = c > hi20 ? 1 : (c < lo20 ? -1 : 0); g_votes[10] = (int)g_vals[10];
-   g_score = 0;
-   for(int i = 0; i < 11; i++) g_score += g_votes[i];
-   g_vals[11] = g_score;                g_votes[11] = g_score > 0 ? 1 : (g_score < 0 ? -1 : 0);
-   g_pBuy = 1.0 / (1.0 + MathExp(-0.35 * g_score));
+   gAtr = atr;
+
+   gVals[0] = rsi;
+   gVotes[0] = 0;
+   if(rsi > 55.0) gVotes[0] = 1;
+   if(rsi < 45.0) gVotes[0] = -1;
+   gVals[1] = (c - eh1) / atr;          gVotes[1] = Sign(c - eh1);
+   gVals[2] = (c - e20) / atr;          gVotes[2] = Sign(c - e20);
+   gVals[3] = (macd - sig) / atr;       gVotes[3] = Sign(macd - sig);
+   gVals[4] = (c - (hi12 + lo12) / 2.0) / atr; gVotes[4] = Sign(c - (hi12 + lo12) / 2.0);
+   gVals[5] = (c - mid) / atr;          gVotes[5] = Sign(c - mid);
+   gVals[6] = atr / atr100;             gVotes[6] = 0;
+   gVals[7] = (c - vwap) / atr;         gVotes[7] = Sign(c - vwap);
+   gVals[8] = (c - r[5].close) / atr;   gVotes[8] = Sign(c - r[5].close);
+   gVals[9] = (c - r[15].close) / atr;  gVotes[9] = Sign(c - r[15].close);
+   gVotes[10] = 0;
+   if(c > hi20) gVotes[10] = 1;
+   if(c < lo20) gVotes[10] = -1;
+   gVals[10] = gVotes[10];
+
+   gScore = 0;
+   for(int j = 0; j < 11; j++)
+      gScore += gVotes[j];
+   gVals[11] = gScore;
+   gVotes[11] = Sign(gScore);
+   gBuy = 1.0 / (1.0 + MathExp(-0.35 * gScore));
    return true;
 }
 
 //+------------------------------------------------------------------+
-//| Basket helpers                                                   |
+//| Panier                                                           |
 //+------------------------------------------------------------------+
-int Basket(double &pnl)
+int CountBasket(double &pnl)
 {
-   int n = 0; pnl = 0;
+   int n = 0;
+   pnl = 0.0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong t = PositionGetTicket(i);
-      if(!PositionSelectByTicket(t)) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol || PositionGetInteger(POSITION_MAGIC) != Magic) continue;
-      n++; pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(t == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      n++;
+      pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
    return n;
 }
 
 void CloseBasket(string why)
 {
-   double pnl; int n = Basket(pnl);
+   double pnl = 0.0;
+   int n = CountBasket(pnl);
    if(n == 0) return;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong t = PositionGetTicket(i);
-      if(!PositionSelectByTicket(t)) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol || PositionGetInteger(POSITION_MAGIC) != Magic) continue;
-      if(!trade.PositionClose(t)) J("Fermeture refusee : code " + IntegerToString(trade.ResultRetcode()));
+      if(t == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(!trade.PositionClose(t))
+         AddLog("Fermeture refusee, code " + IntegerToString((int)trade.ResultRetcode()));
    }
-   g_baskets++;
-   if(pnl > 0) { g_basketWins++; g_sumWin += pnl; } else g_sumLoss += -pnl;
-   J(StringFormat("%s : rafale fermee %+.2f %s", why, pnl, AccountInfoString(ACCOUNT_CURRENCY)));
-   g_side = 0;
+   gBaskets++;
+   if(pnl > 0.0) { gWins++; gSumWin += pnl; }
+   else gSumLoss += -pnl;
+   AddLog(why + " : rafale fermee " + DoubleToString(pnl, 2));
+   gSide = 0;
 }
 
 double NormLot(double lots)
 {
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN), vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   lots = MathFloor(lots / step + 1e-9) * step;
-   return MathMin(MathMax(lots, vmin), vmax);
+   double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double vmax = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(step <= 0.0) step = 0.01;
+   double v = MathFloor(lots / step + 0.000001) * step;
+   if(v < vmin) v = vmin;
+   if(v > vmax) v = vmax;
+   return NormalizeDouble(v, 2);
 }
 
 void OpenBurst(int side)
 {
-   string parts[];
-   int n = StringSplit(Lots, ',', parts);
-   if(n <= 0) { J("Reglage Lots invalide"); return; }
-   g_ref = AccountInfoDouble(ACCOUNT_BALANCE); g_best = 0; g_side = side; g_openTime = TimeCurrent();
-   J(StringFormat("Signal %s valide : %d/10 votes, confiance %.0f%%", side > 0 ? "d'achat" : "de vente",
-                  MathAbs(g_score), (side > 0 ? g_pBuy : 1 - g_pBuy) * 100));
+   double lots[6];
+   lots[0] = Lot1; lots[1] = Lot2; lots[2] = Lot3; lots[3] = Lot4; lots[4] = Lot5; lots[5] = Lot6;
+   gRef = AccountInfoDouble(ACCOUNT_BALANCE);
+   gBest = 0.0;
+   gSide = side;
+   gOpenTime = TimeCurrent();
+   if(side > 0) AddLog("Signal d'achat valide, votes " + IntegerToString(gScore));
+   else AddLog("Signal de vente valide, votes " + IntegerToString(gScore));
    int opened = 0;
-   for(int i = 0; i < n; i++)
+   for(int i = 0; i < 6; i++)
    {
-      StringTrimLeft(parts[i]); StringTrimRight(parts[i]);
-      double lot = NormLot(StringToDouble(parts[i]) * LotScale);
-      bool ok = side > 0 ? trade.Buy(lot, _Symbol, 0, 0, 0, "Live12") : trade.Sell(lot, _Symbol, 0, 0, 0, "Live12");
+      if(lots[i] <= 0.0) continue;
+      double v = NormLot(lots[i] * LotScale);
+      bool ok;
+      if(side > 0) ok = trade.Buy(v, _Symbol, 0.0, 0.0, 0.0, "Live12");
+      else ok = trade.Sell(v, _Symbol, 0.0, 0.0, 0.0, "Live12");
       if(ok) opened++;
-      else J(StringFormat("Ordre refuse : code %d (%s)", trade.ResultRetcode(), trade.ResultRetcodeDescription()));
+      else AddLog("Ordre refuse, code " + IntegerToString((int)trade.ResultRetcode()));
    }
-   if(opened > 0) J(StringFormat("Rafale ouverte : %d %s", opened, side > 0 ? "achats" : "ventes"));
-   else g_side = 0;
+   if(opened > 0) AddLog("Rafale ouverte : " + IntegerToString(opened) + " positions");
+   else gSide = 0;
+}
+
+void ManageBasket()
+{
+   double pnl = 0.0;
+   int n = CountBasket(pnl);
+   if(n == 0) { gSide = 0; return; }
+   if(gRef <= 0.0) gRef = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(gOpenTime == 0) gOpenTime = TimeCurrent();
+   double pct = 100.0 * pnl / gRef;
+   if(pct > gBest) gBest = pct;
+   if(TargetPct > 0.0 && pct >= TargetPct) { CloseBasket("Objectif"); return; }
+   if(LossLimitPct > 0.0 && pct <= -LossLimitPct) { CloseBasket("Limite de perte"); return; }
+   if(LockStartPct > 0.0 && gBest >= LockStartPct && pct <= gBest * LockKeepPct / 100.0) { CloseBasket("Gain protege"); return; }
+   long age = (long)(TimeCurrent() - gOpenTime);
+   if(MaxMinutes > 0 && age >= (long)MaxMinutes * 60) { CloseBasket("Duree max"); return; }
 }
 
 //+------------------------------------------------------------------+
-//| Basket management (every tick and every second)                  |
+//| Un calcul                                                        |
 //+------------------------------------------------------------------+
-void Manage()
+void RunCycle()
 {
-   double pnl; int n = Basket(pnl);
-   if(n == 0) { g_side = 0; return; }
-   if(g_ref <= 0) g_ref = AccountInfoDouble(ACCOUNT_BALANCE);       // after a restart
-   if(g_openTime == 0) g_openTime = TimeCurrent();
-   double pct = 100.0 * pnl / g_ref;
-   if(pct > g_best) g_best = pct;
-   if(TargetPct > 0 && pct >= TargetPct)            { CloseBasket(StringFormat("Objectif %+.2f%%", pct)); return; }
-   if(LossLimitPct > 0 && pct <= -LossLimitPct)     { CloseBasket(StringFormat("Limite de perte %+.2f%%", pct)); return; }
-   if(LockStartPct > 0 && g_best >= LockStartPct && pct <= g_best * LockKeepPct / 100.0)
-   { CloseBasket(StringFormat("Gain protege %+.2f%% (max %+.2f%%)", pct, g_best)); return; }
-   if(MaxMinutes > 0 && (long)(TimeCurrent() - g_openTime) >= (long)MaxMinutes * 60) { CloseBasket("Duree max"); return; }
-}
+   if(!ReadIndicators()) { gStatus = "indicateurs pas prets (historique M1)"; return; }
+   gCalc++;
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   int side = 0;
+   if(gScore >= MinVotes) side = 1;
+   if(gScore <= -MinVotes) side = -1;
+   string base = "calcul " + IntegerToString(gCalc) + " | votes " + IntegerToString(gScore) + " (requis " + IntegerToString(MinVotes) + ")";
 
-//+------------------------------------------------------------------+
-//| One cycle                                                        |
-//+------------------------------------------------------------------+
-void Cycle()
-{
-   if(!Read()) { g_status = "indicateurs pas encore prets (historique M1)"; return; }
-   g_calc++;
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   int side = g_score >= MinVotes ? 1 : (g_score <= -MinVotes ? -1 : 0);
-   double pnl; int n = Basket(pnl);
-   string base = StringFormat("calcul %I64d | votes %+d (requis +/-%d)", g_calc, g_score, MinVotes);
+   double pnl = 0.0;
+   int n = CountBasket(pnl);
    if(n > 0)
    {
-      if(CloseOnFlip && side != 0 && g_side != 0 && side != g_side) { CloseBasket("Signal inverse"); n = 0; }
+      if(CloseOnFlip && side != 0 && gSide != 0 && side != gSide)
+         CloseBasket("Signal inverse");
       else
       {
-         double ref = g_ref > 0 ? g_ref : AccountInfoDouble(ACCOUNT_BALANCE);
-         g_status = base + StringFormat(" | rafale de %d : %+.2f (%+.2f%%), objectif +%.2f%%, limite -%.2f%%",
-                                        n, pnl, 100.0 * pnl / ref, TargetPct, LossLimitPct);
+         double ref = gRef;
+         if(ref <= 0.0) ref = AccountInfoDouble(ACCOUNT_BALANCE);
+         gStatus = base + " | rafale de " + IntegerToString(n) + " : " + DoubleToString(pnl, 2) +
+                   " (" + DoubleToString(100.0 * pnl / ref, 2) + " %)";
          return;
       }
    }
-   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) || !MQLInfoInteger(MQL_TRADE_ALLOWED))
-   { g_status = base + " | BLOQUE : activer 'Trading Algo' et 'Autoriser le trading algorithmique'"; return; }
-   if(side == 0) { g_status = base + " | attend : pas assez de votes alignes"; return; }
-   if(ask - bid > MaxSpreadATR * g_atr) { g_status = base + StringFormat(" | attend : spread %.2f > %.2f", ask - bid, MaxSpreadATR * g_atr); return; }
-   g_status = base + " | RAFALE";
+   if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) == 0 || MQLInfoInteger(MQL_TRADE_ALLOWED) == 0)
+   { gStatus = base + " | BLOQUE : activer Trading Algo"; return; }
+   if(side == 0) { gStatus = base + " | attend : pas assez de votes"; return; }
+   if(ask - bid > MaxSpreadATR * gAtr) { gStatus = base + " | attend : spread trop large"; return; }
+   gStatus = base + " | RAFALE";
    OpenBurst(side);
 }
 
 //+------------------------------------------------------------------+
-//| Panel                                                            |
+//| Panneau                                                          |
 //+------------------------------------------------------------------+
-void Label(string name, int x, int y, string text, color c, int size = 9)
+void SetLabel(string name, int y, string text, color clr)
 {
    if(ObjectFind(0, name) < 0)
    {
       ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
       ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_XDISTANCE, 10);
       ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
    }
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, c);
-   ObjectSetString(0, name, OBJPROP_TEXT, StringLen(text) > 0 ? text : " ");
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   if(StringLen(text) == 0) text = " ";
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
 }
 
-void Panel()
+void DrawPanel()
 {
-   int x = 10, y = 20;
-   double bal = AccountInfoDouble(ACCOUNT_BALANCE), eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   Label("L12_t", x, y, "LIVE 12 INDICATEURS  -  " + _Symbol, clrAqua, 11); y += 22;
-   Label("L12_a", x, y, StringFormat("Solde %.2f   Equite %.2f", bal, eq), clrWhite); y += 16;
-   double aw = (g_basketWins > 0) ? g_sumWin / g_basketWins : 0.0;
-   double al = (g_baskets - g_basketWins > 0) ? g_sumLoss / (g_baskets - g_basketWins) : 0.0;
-   Label("L12_b", x, y, StringFormat("Rafales %d   gagnantes %d   gain moy %.2f   perte moy %.2f   total %+.2f",
-         g_baskets, g_basketWins, aw, al, g_sumWin - g_sumLoss), g_sumWin >= g_sumLoss ? clrLime : clrOrangeRed); y += 16;
-   Label("L12_s", x, y, g_status, clrYellow, 8); y += 20;
-   Label("L12_g", x, y, StringFormat("ACHAT %.1f%%   |   VENTE %.1f%%   (score %+d)", g_pBuy * 100, (1 - g_pBuy) * 100, g_score),
-         g_pBuy >= 0.5 ? clrLime : clrOrangeRed, 11); y += 22;
+   int y = 20;
+   SetLabel("L12_t", y, "LIVE 12 INDICATEURS - " + _Symbol, clrAqua); y += 18;
+   SetLabel("L12_a", y, "Solde " + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) +
+            "   Equite " + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2), clrWhite); y += 16;
+   color tc = clrLime;
+   if(gSumLoss > gSumWin) tc = clrOrangeRed;
+   SetLabel("L12_b", y, "Rafales " + IntegerToString(gBaskets) + "   gagnantes " + IntegerToString(gWins) +
+            "   total " + DoubleToString(gSumWin - gSumLoss, 2), tc); y += 16;
+   SetLabel("L12_s", y, gStatus, clrYellow); y += 18;
+   color gc = clrLime;
+   if(gBuy < 0.5) gc = clrOrangeRed;
+   SetLabel("L12_g", y, "ACHAT " + DoubleToString(gBuy * 100.0, 1) + " %   |   VENTE " +
+            DoubleToString((1.0 - gBuy) * 100.0, 1) + " %", gc); y += 18;
    for(int i = 0; i < 12; i++)
    {
-      string v = g_votes[i] > 0 ? "HAUSSIER" : (g_votes[i] < 0 ? "BAISSIER" : "neutre");
-      Label("L12_i" + IntegerToString(i), x, y, StringFormat("%-12s %8.2f   %s", g_names[i], g_vals[i], v),
-            g_votes[i] > 0 ? clrLime : (g_votes[i] < 0 ? clrOrangeRed : clrSilver), 8);
+      string v = "neutre";
+      color c = clrSilver;
+      if(gVotes[i] > 0) { v = "HAUSSIER"; c = clrLime; }
+      if(gVotes[i] < 0) { v = "BAISSIER"; c = clrOrangeRed; }
+      SetLabel("L12_i" + IntegerToString(i), y, gNames[i] + "  " + DoubleToString(gVals[i], 2) + "  " + v, c);
       y += 14;
    }
-   y += 8;
-   Label("L12_j", x, y, "JOURNAL", clrAqua); y += 16;
-   for(int i = 0; i < 10; i++) { Label("L12_l" + IntegerToString(i), x, y, i < g_jn ? g_journal[i] : "", clrSilver, 8); y += 13; }
+   y += 6;
+   for(int k = 0; k < 8; k++)
+   {
+      SetLabel("L12_l" + IntegerToString(k), y, gLog[k], clrSilver);
+      y += 14;
+   }
 }
 
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   trade.SetExpertMagicNumber(Magic);
-   trade.SetTypeFillingBySymbol(_Symbol);
+   gNames[0] = "RSI 14";      gNames[1] = "Tendance H1"; gNames[2] = "Ecart MM20";  gNames[3] = "MACD";
+   gNames[4] = "Structure";   gNames[5] = "Bollinger";   gNames[6] = "Volatilite";  gNames[7] = "VWAP";
+   gNames[8] = "Momentum 5";  gNames[9] = "Momentum 15"; gNames[10] = "Cassure";    gNames[11] = "Alignement";
+   for(int i = 0; i < 8; i++) gLog[i] = "";
+
+   trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(30);
-   hRSI = iRSI(_Symbol, PERIOD_M1, 14, PRICE_CLOSE);
-   hMACD = iMACD(_Symbol, PERIOD_M1, 12, 26, 9, PRICE_CLOSE);
-   hEMA20 = iMA(_Symbol, PERIOD_M1, 20, 0, MODE_EMA, PRICE_CLOSE);
-   hEMAH1 = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
-   hBB = iBands(_Symbol, PERIOD_M1, 20, 0, 2.0, PRICE_CLOSE);
-   hATR = iATR(_Symbol, PERIOD_M1, 14);
+
+   hRSI    = iRSI(_Symbol, PERIOD_M1, 14, PRICE_CLOSE);
+   hMACD   = iMACD(_Symbol, PERIOD_M1, 12, 26, 9, PRICE_CLOSE);
+   hEMA20  = iMA(_Symbol, PERIOD_M1, 20, 0, MODE_EMA, PRICE_CLOSE);
+   hEMAH1  = iMA(_Symbol, PERIOD_H1, 50, 0, MODE_EMA, PRICE_CLOSE);
+   hBB     = iBands(_Symbol, PERIOD_M1, 20, 0, 2.0, PRICE_CLOSE);
+   hATR    = iATR(_Symbol, PERIOD_M1, 14);
    hATR100 = iATR(_Symbol, PERIOD_M1, 100);
    if(hRSI == INVALID_HANDLE || hMACD == INVALID_HANDLE || hEMA20 == INVALID_HANDLE || hEMAH1 == INVALID_HANDLE ||
-      hBB == INVALID_HANDLE || hATR == INVALID_HANDLE || hATR100 == INVALID_HANDLE) return INIT_FAILED;
-   J("Demarrage sur " + _Symbol);
-   EventSetTimer(1);
+      hBB == INVALID_HANDLE || hATR == INVALID_HANDLE || hATR100 == INVALID_HANDLE)
+   {
+      Print("Erreur de creation des indicateurs");
+      return INIT_FAILED;
+   }
+   int secs = CycleSeconds;
+   if(secs < 1) secs = 1;
+   EventSetTimer(secs);
+   AddLog("Demarrage sur " + _Symbol);
    return INIT_SUCCEEDED;
 }
 
-void OnDeinit(const int reason) { EventKillTimer(); ObjectsDeleteAll(0, "L12_"); }
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+   ObjectsDeleteAll(0, "L12_");
+}
 
-void OnTick() { Manage(); }
+void OnTick()
+{
+   ManageBasket();
+}
 
 void OnTimer()
 {
-   Manage();
-   if(GetTickCount64() - g_lastCycle >= (ulong)CycleSeconds * 1000)
-   {
-      g_lastCycle = GetTickCount64();
-      Cycle();
-   }
-   Panel();
+   ManageBasket();
+   RunCycle();
+   DrawPanel();
 }
 //+------------------------------------------------------------------+
