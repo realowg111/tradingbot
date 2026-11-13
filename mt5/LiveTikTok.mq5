@@ -21,7 +21,7 @@
 //| arret jusqu'au lendemain a -8 % sur le jour.                     |
 //| Options desactivees par defaut : TrendFilter, MaxBurstMinutes.   |
 //+------------------------------------------------------------------+
-#property version "1.70"
+#property version "1.80"
 #include <Trade\Trade.mqh>
 
 input int    PauseSeconds   = 5;     // Pause sans position entre deux rafales
@@ -49,11 +49,17 @@ input int    LossStreak     = 3;     // Apres N rafales perdantes d'affilee...
 input int    StreakPauseSec = 15;    // ...pause de N secondes (0 = off)
 
 input int    DirectionMode  = 0;     // Sens : 0 = jauge des 12 indicateurs, 1 = jauge ET contre-courant d'accord, 2 = contre-courant seul
-input double MinConfidence  = 60;    // Jauge : confiance minimale (%) du cote choisi, en moyenne sur la pause
+input double MinConfidence  = 60;    // Jauge : confiance minimale (%) pour une direction claire
+input int    StableSeconds  = 3;     // Jauge : le sentiment doit etre le meme depuis au moins N secondes
+input bool   ShowGaugePanel = true;  // Afficher le tableau de jauge sur le graphique
 input double DailyLossPct   = 8.0;   // Arret jusqu'au lendemain si le compte perd x % dans la journee (0 = off)
 input long   MagicNumber    = 7777;
 
 CTrade trade;
+
+// declarations anticipees
+int ClearDirection();
+int FlipsLastMinute();
 
 // proportions des lots de la 4e rafale du live (0.30 / 0.20 / 0.15 / 0.10 / 0.05 / 0.05 / 0.05)
 double weights[7] = {0.30, 0.20, 0.15, 0.10, 0.05, 0.05, 0.05};
@@ -140,6 +146,9 @@ int Vote(double a, double b)
 }
 
 //--- les 12 indicateurs sur le prix en direct -> score de -10 a +10
+string indNames[10] = {"RSI 14", "Tendance H1", "Moyenne 20", "MACD", "Structure", "Bollinger", "Momentum 5", "Momentum 15", "Derniere bougie", "Cassure"};
+int    indVotes[10];
+
 bool ComputeScore()
 {
    MqlRates r[];
@@ -155,19 +164,22 @@ bool ComputeScore()
       if(r[i].high > hi) hi = r[i].high;
       if(r[i].low < lo) lo = r[i].low;
    }
+   indVotes[0] = 0;
+   if(rsi > 55) indVotes[0] = 1;
+   if(rsi < 45) indVotes[0] = -1;
+   indVotes[1] = Vote(price, eh1);              // tendance H1
+   indVotes[2] = Vote(price, e20);              // moyenne 20
+   indVotes[3] = Vote(macd, sig);               // MACD
+   indVotes[4] = Vote(price, (hi + lo) / 2);    // structure
+   indVotes[5] = Vote(price, mid);              // Bollinger
+   indVotes[6] = Vote(price, r[5].close);       // momentum 5
+   indVotes[7] = Vote(price, r[15].close);      // momentum 15
+   indVotes[8] = Vote(price, r[1].close);       // derniere bougie
+   indVotes[9] = 0;                             // cassure
+   if(price > hi) indVotes[9] = 1;
+   if(price < lo) indVotes[9] = -1;
    score = 0;
-   if(rsi > 55) score++;
-   if(rsi < 45) score--;
-   score += Vote(price, eh1);              // tendance H1
-   score += Vote(price, e20);              // ecart MM20
-   score += Vote(macd, sig);               // MACD
-   score += Vote(price, (hi + lo) / 2);    // structure
-   score += Vote(price, mid);              // Bollinger
-   score += Vote(price, r[5].close);       // momentum 5
-   score += Vote(price, r[15].close);      // momentum 15
-   score += Vote(price, r[1].close);       // derniere bougie
-   if(price > hi) score++;                 // cassure
-   if(price < lo) score--;
+   for(int k = 0; k < 10; k++) score += indVotes[k];
    return true;
 }
 
@@ -429,9 +441,7 @@ void Step()
       // cote de la jauge (moyenne pendant la pause)
       double avg = (gaugeN > 0 ? gaugeSum / gaugeN : 0);
       double buyPct = 50.0 + 5.0 * avg;
-      int gaugeSide = 0;
-      if(buyPct >= MinConfidence) gaugeSide = 1;
-      if(100.0 - buyPct >= MinConfidence) gaugeSide = -1;
+      int gaugeSide = ClearDirection();             // direction claire : sentiment stable + confiance
       // cote du contre-courant
       double move = PriceMove(LookbackSeconds);
       int counterSide = 0;
@@ -580,9 +590,115 @@ void OnDeinit(const int reason)
 {
    EventKillTimer();
    Comment("");
+   ObjectsDeleteAll(0, "G_");
 }
 
 void OnTick() { Step(); }
+
+//--- direction claire : meme sentiment depuis StableSeconds et confiance >= MinConfidence
+int ClearDirection()
+{
+   if(liveSent == 0) return 0;
+   double conf = 50.0 + 5.0 * MathAbs((double)score);
+   if((int)(TimeTradeServer() - liveSentSince) < StableSeconds) return 0;
+   if(conf < MinConfidence) return 0;
+   if(liveSent > 0 && score <= 0) return 0;
+   if(liveSent < 0 && score >= 0) return 0;
+   return liveSent;
+}
+
+//--- tableau de jauge sur le graphique
+void Rect(string name, int x, int y, int w, int h, color bg)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w < 1 ? 1 : w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, bg);
+}
+
+void Text(string name, int x, int y, string txt, color c, int size)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, size);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, c);
+   if(StringLen(txt) == 0) txt = " ";
+   ObjectSetString(0, name, OBJPROP_TEXT, txt);
+}
+
+void DrawGaugePanel()
+{
+   if(!ShowGaugePanel) return;
+   int x0 = 10, y0 = 330, w = 330;
+   color navy = C'14,21,70', green = C'51,245,160', red = C'255,77,109', grey = C'143,155,214';
+   double buyPct = 50.0 + 5.0 * score;
+   Rect("G_bg", x0, y0, w, 440, navy);
+   Text("G_t", x0 + 10, y0 + 8, "SENTIMENT & CONFIANCE  (chaque seconde)", grey, 9);
+   string sent = "NEUTRE"; color sc = grey;
+   if(liveSent > 0) { sent = "HAUSSIER"; sc = green; }
+   if(liveSent < 0) { sent = "BAISSIER"; sc = red; }
+   Text("G_s", x0 + 10, y0 + 28, sent, sc, 22);
+   Text("G_c", x0 + 190, y0 + 38, "confiance " + DoubleToString(MathMax(buyPct, 100.0 - buyPct), 0) + " %", clrWhite, 10);
+   Text("G_d", x0 + 10, y0 + 66, "depuis " + IntegerToString((int)(TimeTradeServer() - liveSentSince)) + " s   |   bascules sur 1 min : " +
+        IntegerToString(FlipsLastMinute()), grey, 9);
+   // barres ACHAT / VENTE
+   int bw = w - 20;
+   Text("G_ba", x0 + 10, y0 + 88, "ACHAT " + DoubleToString(buyPct, 0) + " %", green, 11);
+   Rect("G_bab", x0 + 10, y0 + 108, bw, 12, C'40,50,110');
+   Rect("G_baf", x0 + 10, y0 + 108, (int)(bw * buyPct / 100.0), 12, green);
+   Text("G_bv", x0 + 10, y0 + 126, "VENTE " + DoubleToString(100.0 - buyPct, 0) + " %", red, 11);
+   Rect("G_bvb", x0 + 10, y0 + 146, bw, 12, C'40,50,110');
+   Rect("G_bvf", x0 + 10, y0 + 146, (int)(bw * (100.0 - buyPct) / 100.0), 12, red);
+   // frise des 30 dernieres secondes
+   Text("G_tl", x0 + 10, y0 + 166, "30 dernieres secondes", grey, 8);
+   int n = StringLen(timeline);
+   for(int i = 0; i < 30; i++)
+   {
+      color cc = C'40,50,110';
+      int k = n - 30 + i;
+      if(k >= 0)
+      {
+         ushort ch = StringGetCharacter(timeline, k);
+         if(ch == '+') cc = green;
+         else if(ch == '-') cc = red;
+         else cc = grey;
+      }
+      Rect("G_tq" + IntegerToString(i), x0 + 10 + i * 10, y0 + 182, 8, 12, cc);
+   }
+   // direction
+   int dir = ClearDirection();
+   string ds = "PAS DE DIRECTION CLAIRE"; color dc = grey;
+   if(dir > 0) { ds = "DIRECTION : ACHAT CLAIR"; dc = green; }
+   if(dir < 0) { ds = "DIRECTION : VENTE CLAIRE"; dc = red; }
+   Text("G_dir", x0 + 10, y0 + 202, ds, dc, 12);
+   Text("G_dr", x0 + 10, y0 + 222, "(meme sentiment depuis " + IntegerToString(StableSeconds) + " s et confiance >= " +
+        DoubleToString(MinConfidence, 0) + " %)", grey, 8);
+   // les 10 indicateurs
+   for(int j = 0; j < 10; j++)
+   {
+      string arrow = "•"; color ac = grey;
+      if(indVotes[j] > 0) { arrow = "▲ haussier"; ac = green; }
+      if(indVotes[j] < 0) { arrow = "▼ baissier"; ac = red; }
+      Text("G_in" + IntegerToString(j), x0 + 10, y0 + 244 + j * 18, indNames[j], clrWhite, 9);
+      Text("G_iv" + IntegerToString(j), x0 + 170, y0 + 244 + j * 18, arrow, ac, 9);
+   }
+   ChartRedraw();
+}
 
 //--- toutes les secondes : sentiment et pourcentages, bascules
 void GaugeEverySecond()
@@ -609,6 +725,7 @@ void GaugeEverySecond()
       liveSent = sent;
       liveSentSince = now;
    }
+   DrawGaugePanel();
 }
 
 int FlipsLastMinute()
