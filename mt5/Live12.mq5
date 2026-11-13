@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //| Live12.mq5 - version simple                                      |
-//| 10 indicateurs votent. Si assez de votes : 6 positions ouvertes. |
+//| 10 indicateurs votent chaque seconde -> jauge ACHAT % / VENTE %. |
+//| Si la confiance reste du meme cote pendant 3 s : 6 positions.    |
 //| Le groupe est ferme a +0.6 % (gain) ou -0.4 % (perte).          |
 //+------------------------------------------------------------------+
 #property version "1.00"
@@ -13,6 +14,8 @@ input double LossPct    = 0.4;    // Ferme tout a -x % du solde
 input int    MaxMinutes = 10;     // Duree max d'une rafale (minutes)
 input bool   VideoMode  = false;  // true = rythme de la video : 2 votes, rafale fermee apres 6 s, objectif +0.3 %
 input int    MaxSeconds = 0;      // Ferme la rafale apres N secondes (0 = off)
+input int    ReadSeconds   = 3;   // Lecture : la confiance doit rester du meme cote pendant N secondes
+input double MinConfidence = 70;  // Lecture : confiance minimale (%) a chaque seconde de lecture
 input long   MagicNumber = 1212;
 
 CTrade trade;
@@ -28,6 +31,12 @@ int    useSeconds;
 string lastError = "aucune";
 string lastClose = "aucune";
 int bursts = 0;
+// lecture de la jauge seconde par seconde
+int    readSide = 0;              // cote lu (1 achat, -1 vente, 0 aucun)
+int    readCount = 0;             // secondes consecutives de lecture du meme cote
+double readSum = 0;               // somme des confiances lues
+int    useRead;
+double useConf;
 
 //+------------------------------------------------------------------+
 double Val(int handle, int buffer)
@@ -164,7 +173,9 @@ void Manage()
 int OnInit()
 {
    useVotes = MinVotes; useTarget = TargetPct; useLoss = LossPct; useSeconds = MaxSeconds;
-   if(VideoMode) { useVotes = 2; useTarget = 0.3; useLoss = 0.4; useSeconds = 6; }
+   useRead = ReadSeconds; useConf = MinConfidence;
+   if(VideoMode) { useVotes = 2; useTarget = 0.3; useLoss = 0.4; useSeconds = 6; useRead = 3; useConf = 60; }
+   if(useRead < 1) useRead = 1;
    trade.SetExpertMagicNumber((ulong)MagicNumber);
    trade.SetDeviationInPoints(50);
    // mode d'execution accepte par le courtier (sinon les ordres sont refuses)
@@ -199,18 +210,39 @@ void OnTimer()
 
    double profit;
    int n = CountPositions(profit);
+
+   // 1) lecture de la jauge : confiance du cote dominant, a chaque seconde
+   double buyPct = 50.0 + 5.0 * score;
+   int nowSide = 0;
+   double conf = 50.0;
+   if(score > 0) { nowSide = 1; conf = buyPct; }
+   if(score < 0) { nowSide = -1; conf = 100.0 - buyPct; }
+   bool strong = (nowSide != 0 && conf >= useConf && MathAbs(score) >= useVotes);
+   if(strong && nowSide == readSide) { readCount++; readSum += conf; }
+   else if(strong) { readSide = nowSide; readCount = 1; readSum = conf; }
+   else { readSide = 0; readCount = 0; readSum = 0; }
+
+   // 2) signal valide si la lecture a dure assez longtemps
    int side = 0;
-   if(score >= useVotes) side = 1;
-   if(score <= -useVotes) side = -1;
+   if(readCount >= useRead) side = readSide;
 
    if(n > 0 && side != 0 && side != burstSide) { CloseAll("signal inverse"); n = 0; }
-   if(n == 0 && side != 0) OpenBurst(side);
+   if(n == 0 && side != 0)
+   {
+      Print("Lecture validee : ", readCount, " s, confiance moyenne ", DoubleToString(readSum / readCount, 0), " %");
+      OpenBurst(side);
+      readSide = 0; readCount = 0; readSum = 0;     // nouvelle lecture pour la rafale suivante
+   }
+
+   string reading = "en attente d'un cote dominant";
+   if(readCount > 0)
+      reading = (readSide > 0 ? "ACHAT " : "VENTE ") + IntegerToString(readCount) + "/" + IntegerToString(useRead) +
+                " s, confiance moyenne " + DoubleToString(readSum / readCount, 0) + " %";
 
    string allowed = "OUI";
    if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) == 0) allowed = "NON : bouton Trading Algo";
    else if(MQLInfoInteger(MQL_TRADE_ALLOWED) == 0) allowed = "NON : cocher 'Autoriser le trading algorithmique'";
 
-   double buyPct = 50.0 + 5.0 * score;
    Comment("LIVE 12  -  ", _Symbol,
            "\nTrading autorise : ", allowed,
            "\nDerniere erreur d'ordre : ", lastError,
@@ -219,6 +251,7 @@ void OnTimer()
            "\nScore : ", score, " (requis +/-", useVotes, ")",
            "\nMode video : ", (VideoMode ? "OUI" : "non"), "   duree max rafale : ", (useSeconds > 0 ? IntegerToString(useSeconds) + " s" : IntegerToString(MaxMinutes) + " min"),
            "\nACHAT ", DoubleToString(buyPct, 0), " %   VENTE ", DoubleToString(100 - buyPct, 0), " %",
+           "\nLecture : ", reading, "   (requis ", useRead, " s a ", DoubleToString(useConf, 0), " % ou plus)",
            "\nPositions : ", n, "   Resultat : ", DoubleToString(profit, 2),
            "\nSolde : ", DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2));
 }
