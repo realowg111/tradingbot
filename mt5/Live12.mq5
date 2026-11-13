@@ -25,6 +25,9 @@ input int    MaxSeconds   = 180;    // Duree max d'une rafale
 input double TrailATR     = 0.3;    // Distance du stop suiveur du reste, en ATR
 input double SafetySL_ATR = 2.0;    // Stop de securite chez le courtier, en ATR (coupure)
 input long   MagicNumber  = 1212;
+input bool   LiveTikTok   = false;  // true = exactement comme le live : lots du live, sans stop, ferme tout a +TikTokTargetPct
+input double TikTokTargetPct = 3.0; // Live : ferme toute la rafale quand le gain atteint x % du solde
+input double TikTokStopPct   = 0.0; // Live : arret d'urgence a -x % du solde (0 = aucun, comme le live)
 
 CTrade trade;
 int hRSI, hMACD, hEMA20, hEMAH1, hBB, hATR;
@@ -32,6 +35,8 @@ int hRSI, hMACD, hEMA20, hEMAH1, hBB, hATR;
 // lots de la rafale : le 1er (le plus gros) a le TP le plus proche
 double lots[6]  = {0.30, 0.20, 0.15, 0.10, 0.05, 0.05};
 double tpATR[6] = {0.15, 0.25, 0.35, 0.50, 0.70, 1.00};
+// lots vus dans le live TikTok pour un compte d'environ 500
+double liveLots[6] = {0.08, 0.08, 0.05, 0.10, 0.15, 0.05};
 
 int    score = 0;
 double atr = 0;
@@ -158,6 +163,20 @@ void OpenBurst(int side)
    {
       double price, sl, tp;
       bool ok;
+      if(LiveTikTok)
+      {
+         // comme le live : taille proportionnelle au solde (lots du live pour 500), ni stop ni TP
+         double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+         double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+         double v = MathFloor(liveLots[i] * startBalance / 500.0 / step) * step;
+         if(v < minLot) v = minLot;
+         v = NormalizeDouble(v, 2);
+         if(side > 0) ok = trade.Buy(v, _Symbol, 0, 0, 0);
+         else ok = trade.Sell(v, _Symbol, 0, 0, 0);
+         if(ok) burstSize++;
+         else lastError = IntegerToString((int)trade.ResultRetcode()) + " " + trade.ResultComment();
+         continue;
+      }
       if(side > 0)
       {
          price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -252,6 +271,14 @@ void Manage()
 
    double pct = 100.0 * (AccountInfoDouble(ACCOUNT_EQUITY) - startBalance) / startBalance;
    long age = (long)(TimeTradeServer() - openTime);
+
+   if(LiveTikTok)
+   {
+      // comme le live : on attend, sans coupure, et on ferme tout en gain
+      if(pct >= TikTokTargetPct) { EndBurst("objectif du live atteint"); return; }
+      if(TikTokStopPct > 0 && pct <= -TikTokStopPct) { EndBurst("arret d'urgence"); return; }
+      return;
+   }
    double move = BasketMove();                         // > 0 : le prix va dans le bon sens
 
    if(atr > 0 && move <= -LossATR * atr) { EndBurst("limite de perte (prix contre la rafale)"); return; }
@@ -335,7 +362,9 @@ void OnTimer()
       ph = "RAFALE : " + IntegerToString(n) + "/" + IntegerToString(burstSize) + " positions, " +
            DoubleToString(profit, 2) + ", depuis " + IntegerToString((int)(TimeTradeServer() - openTime)) + " s";
 
-   Comment("LIVE 12  -  ", _Symbol,
+   double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+   Comment("LIVE 12  -  ", _Symbol, (LiveTikTok ? "   [MODE LIVE TIKTOK : sans stop]" : ""),
+           "\nNiveau de marge : ", (marginLevel > 0 ? DoubleToString(marginLevel, 0) + " %" : "-"),
            "\nTrading autorise : ", allowed, "   derniere erreur : ", lastError,
            "\nPhase : ", ph,
            "\nACHAT ", DoubleToString(buyPct, 0), " %   VENTE ", DoubleToString(100 - buyPct, 0), " %   (score ", score, ")",
