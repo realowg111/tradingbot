@@ -127,11 +127,25 @@ Dans la vidéo, à 09:06:12, six achats sont ouverts dans la même seconde (0,05
 
 Sur un compte de 1 000 €, réglez `RafaleLotScale` à 0,2 ou 0,3 : une rafale complète fait 0,85 lot, ce qui est beaucoup pour ce capital. Ce mode se teste dans le testeur MT5 en « ticks réels » puis en démo. Mes données en bougies d'1 minute ne peuvent pas le vérifier.
 
+### Mode RAFALE_RAPIDE : le rythme de la vidéo
+
+Dans la vidéo, les rafales s'ouvrent à 09:06:11, 09:06:21, 09:06:31 et 09:06:44, soit environ une toutes les 10 secondes, en changeant de sens. `Preset = RAFALE_RAPIDE` reprend le mode RAFALE avec ce rythme :
+
+| Réglage | RAFALE | RAFALE_RAPIDE |
+|---|---|---|
+| Calcul toutes les | 5 s | 5 s |
+| Votes requis | 7 sur 10 | **2** (il suit la majorité, comme une jauge à 59 / 42 %) |
+| Coupe si la rafale n'est pas gagnante après | 10 s | **5 s** |
+| Durée max d'une rafale | 60 s | **10 s** |
+| Spread max | 0,3 ATR | **0,5 ATR** |
+
+Les lots, les TP et le stop restent ceux du groupe « Mode RAFALE ». Ce rythme multiplie le nombre de trades, donc les frais : à comparer avec RAFALE sur un 2e graphique avec un autre `Magic`.
+
 ## Réglages principaux
 
 | Paramètre | Défaut | Rôle |
 |---|---|---|
-| `Preset` | TENDANCE | TENDANCE, VIDEO, SECONDES, RAFALE ou CUSTOM |
+| `Preset` | TENDANCE | TENDANCE, VIDEO, SECONDES, RAFALE, RAFALE_RAPIDE ou CUSTOM |
 | `RiskPerTradePct` | 1 | Risque par trade en % de l'équité (ou `FixedLot`) |
 | `LotProgression` | 1 (désactivé) | Grille : taille × facteur à chaque position ajoutée. Mode VIDEO seulement, en démo. |
 | `DailyStopPct` | 0 (désactivé) | Arrêt pour la journée au-delà de x % de perte |

@@ -21,6 +21,9 @@
 //|    each with its own TP (biggest lot = nearest TP), common stop; |
 //|    remaining positions protected at entry after the first TP;    |
 //|    burst closed on a flip or if not positive after 10 s.         |
+//|  RAFALE_RAPIDE : RAFALE with the video's rhythm: a calcul every   |
+//|    5 s, 2 votes are enough (majority side), burst cut after 5 s, |
+//|    10 s max, wider spread tolerance.                             |
 //|  CUSTOM   : every setting below is used as entered.              |
 //|                                                                  |
 //| Backtests (scripts/scalping_lab, scripts/xau_daytrade): the      |
@@ -29,12 +32,12 @@
 //| (about -4 %/yr at 0.5 % risk, Nasdaq 2014-2024). Demo first.     |
 //+------------------------------------------------------------------+
 #property copyright "tradingbot"
-#property version   "5.00"
+#property version   "5.10"
 #property strict
 
 #include <Trade/Trade.mqh>
 
-enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2, PRESET_SECONDES = 3, PRESET_RAFALE = 4 };
+enum ENUM_PRESET { PRESET_CUSTOM = 0, PRESET_VIDEO = 1, PRESET_TENDANCE = 2, PRESET_SECONDES = 3, PRESET_RAFALE = 4, PRESET_RAFALE_RAPIDE = 5 };
 
 input group "Mode"
 input ENUM_PRESET Preset       = PRESET_TENDANCE; // Preregage (CUSTOM = utiliser les valeurs ci-dessous)
@@ -119,6 +122,9 @@ bool   p_sec = false;
 bool   p_raf = false;
 int    g_rafCount = 0;          // positions opened in the current burst
 int    g_rafSide = 0;
+// effective RAFALE settings (RAFALE_RAPIDE overrides them with the video's rhythm)
+int    r_cycle, r_minVotes, r_cut, r_max;
+double r_spread;
 
 // recent ticks (mid price, time in ms) for the momentum of the SECONDES mode
 double   g_tkP[1024];
@@ -177,9 +183,15 @@ void ApplyPreset()
       p_swing = false; p_tpAtr = 0.2; p_slAtr = 1.5; p_hold = 30; p_closeOpp = true;
       p_maxPos = 5; p_spacing = 0.1; p_window = false;
    }
-   else if(Preset == PRESET_RAFALE)
+   r_cycle = RafaleCycleSeconds; r_minVotes = RafaleMinVotes; r_cut = RafaleCutSeconds; r_max = RafaleMaxSeconds; r_spread = MaxSpreadATR;
+   if(Preset == PRESET_RAFALE || Preset == PRESET_RAFALE_RAPIDE)
    {
       p_name = "RAFALE"; p_raf = true; p_trend = false; p_window = false; p_tick = false;
+   }
+   if(Preset == PRESET_RAFALE_RAPIDE)
+   {
+      // rhythm seen in the video: a burst about every 5-10 s, following the majority side
+      p_name = "RAFALE RAPIDE"; r_cycle = 5; r_minVotes = 2; r_cut = 5; r_max = 10; r_spread = 0.5;
    }
    else if(Preset == PRESET_SECONDES)
    {
@@ -306,10 +318,10 @@ void RafaleCycle()
    g_calc++;
    double atr = CurrentATR();
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK), bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   int side = g_score >= RafaleMinVotes ? 1 : (g_score <= -RafaleMinVotes ? -1 : 0);
+   int side = g_score >= r_minVotes ? 1 : (g_score <= -r_minVotes ? -1 : 0);
    double e; int open = CountPositions(0, e, 0);
    string base = StringFormat("calcul %I64d | ACHAT %.0f%% VENTE %.0f%% | votes %+d (requis +/-%d) | spread %.2f (max %.2f)",
-                              g_calc, g_pBuy * 100, (1 - g_pBuy) * 100, g_score, RafaleMinVotes, ask - bid, MaxSpreadATR * atr);
+                              g_calc, g_pBuy * 100, (1 - g_pBuy) * 100, g_score, r_minVotes, ask - bid, r_spread * atr);
    if(g_halted) { g_secStatus = base + " -> arret journalier"; return; }
    if(open > 0)
    {
@@ -318,7 +330,7 @@ void RafaleCycle()
    }
    if(side == 0) { g_secStatus = base + " -> attend : pas assez de signaux alignes"; return; }
    if(atr <= 0) { g_secStatus = base + " -> attend : ATR indisponible"; return; }
-   if(ask - bid > MaxSpreadATR * atr) { g_secStatus = base + " -> attend : spread trop large"; return; }
+   if(ask - bid > r_spread * atr) { g_secStatus = base + " -> attend : spread trop large"; return; }
    g_secStatus = base + " -> RAFALE";
    J(StringFormat("Analyse %s : biais %s, %d/10 signaux alignes, confiance %.0f%%", _Symbol, side > 0 ? "acheteur" : "vendeur",
                   MathAbs(g_score), (side > 0 ? g_pBuy : 1 - g_pBuy) * 100));
@@ -340,9 +352,9 @@ void RafaleManage()
    }
    if(n == 0) return;
    long age = (long)(TimeCurrent() - first);
-   if((age >= RafaleCutSeconds && pnl <= 0) || age >= RafaleMaxSeconds)
+   if((age >= r_cut && pnl <= 0) || age >= r_max)
    {
-      CloseSide(0, age >= RafaleMaxSeconds ? "duree max" : "rafale non gagnante");
+      CloseSide(0, age >= r_max ? "duree max" : "rafale non gagnante");
       return;
    }
    // after the first TP: protect the rest at their entry price
@@ -1001,7 +1013,7 @@ void OnTimer()
       g_lastSecCycle = GetTickCount64();
       SecCycle();
    }
-   if(p_raf && GetTickCount64() - g_lastSecCycle >= (ulong)RafaleCycleSeconds * 1000)
+   if(p_raf && GetTickCount64() - g_lastSecCycle >= (ulong)r_cycle * 1000)
    {
       g_lastSecCycle = GetTickCount64();
       RafaleCycle();
